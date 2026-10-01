@@ -485,7 +485,7 @@ test('excess discrepancy defaults to a valid resolution and clears after resolvi
   await mockSession(page)
   let resolved = false
   await page.route('**/api/transfers/50', route => route.fulfill({ json: { id: '50', transferNumber: 'QA-EXCESS', status: 'DISPUTED', revision: 1, sourceWarehouseId: '1', destinationWarehouseId: '2', items: [] } }))
-  await page.route('**/api/transfers/50/discrepancies', route => route.fulfill({ json: { items: [{ id: '51', transferItemId: '52', kind: 'EXCESS', reportedQty: '1', outstandingQty: resolved ? '0' : '1', status: resolved ? 'RESOLVED' : 'OPEN', reason: 'Extra delivery' }] } }))
+  await page.route('**/api/transfers/50/discrepancies', route => route.fulfill({ json: { items: [{ id: '51', transferItemId: '52', kind: 'EXCESS', reportedQty: '1.000000', outstandingQty: resolved ? '0.000000' : '1.000000', status: resolved ? 'RESOLVED' : 'OPEN', reason: 'Extra delivery' }] } }))
   await page.route('**/api/discrepancies/51/resolve', route => {
     const body = route.request().postDataJSON()
     if (body.resolutionType !== 'ACCEPT_EXCESS') return route.fulfill({ status: 400, json: { error: { code: 'INVALID_RESOLUTION', message: 'Invalid excess resolution.' } } })
