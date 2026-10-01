@@ -113,6 +113,7 @@ test('CSV file picker submits file bytes and displays validation before commit',
   await page.getByLabel('CSV file').setInputFiles({ name: 'qa-products.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) })
   await page.getByRole('button', { name: 'Upload & validate' }).click()
   await expect(page.getByRole('heading', { name: 'CSV preview' })).toBeVisible()
+  await expect(page.getByRole('status')).toHaveText('Upload received.')
   await expect(page.getByText('Keyboard fixture', { exact: true })).toBeVisible()
   expect(multipart).toContain('filename="qa-products.csv"')
   expect(multipart).toContain(csv)

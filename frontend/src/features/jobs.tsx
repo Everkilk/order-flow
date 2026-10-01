@@ -49,7 +49,7 @@ export function Jobs() {
     setError(undefined); setSuccess('')
     if (file.size > 20 * 1024 * 1024) { setError(new Error('CSV must be at most 20 MB.')); return }
     const body = new FormData(); body.set('file', file)
-    try { const row = await api<{ id: string }>(`/imports/${importKind}`, { method: 'POST', body }); setSelectedImport(row.id); setFile(null); await client.invalidateQueries({ queryKey: ['page', '/imports'] }); setSuccess('Upload received. Validation is running.') } catch (e) { setError(e) }
+    try { const row = await api<{ id: string }>(`/imports/${importKind}`, { method: 'POST', body }); setSelectedImport(row.id); setFile(null); await client.invalidateQueries({ queryKey: ['page', '/imports'] }); setSuccess('Upload received.') } catch (e) { setError(e) }
   }
   async function commit() {
     if (!selectedImport || !importDetail.data) return
