@@ -17,4 +17,4 @@ COPY migrations ./migrations
 RUN mkdir /app/data && chown node:node /app/data
 USER node
 EXPOSE 3000
-CMD ["node", "dist/index.js"]
+CMD ["/bin/sh", "-c", "node scripts/db.mjs migrate && exec node dist/index.js"]

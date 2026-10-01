@@ -18,9 +18,9 @@ First publish the reviewed application code to the Git repository that Render ca
 | Docker Build Context | `.` |
 | Compute | Free |
 | Health Check Path | `/health/ready` |
-| Docker Command | `/bin/sh -c 'node scripts/db.mjs migrate && exec node dist/index.js'` |
+| Docker Command | Leave blank; the Dockerfile runs migrations before starting the API |
 
-The Docker Command runs the idempotent migrations before the API starts. Free web services cannot use Render's pre-deploy command or dashboard shell. Migration checks also run on cold starts; this can increase the first response time. The migration script uses a database advisory lock so concurrent starts do not apply the same migration twice.
+The Dockerfile's default startup command runs the idempotent migrations before the API starts. Free web services cannot use Render's pre-deploy command or dashboard shell. Migration checks also run on cold starts; this can increase the first response time. The migration script uses a database advisory lock so concurrent starts do not apply the same migration twice.
 
 Set these environment variables on the web service. Enter credentials in Render's Environment page, not in Git or Vercel:
 
