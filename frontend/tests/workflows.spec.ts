@@ -482,6 +482,44 @@ test('stock approval shows stale balance errors and requires a fresh review befo
   await expect(page.locator('.summary-row').filter({ has: page.getByText('Status', { exact: true }) })).toContainText('APPROVED')
 })
 
+test('evidence picker is named, rejects oversized files and submits a small file', async ({ page }) => {
+  await mockSession(page)
+  let uploaded = false, uploadCount = 0
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=', 'base64')
+  await page.route('**/api/stock-requests/40', route => route.fulfill({ json: { id: '40', requestType: 'DAMAGE', decision: 'APPROVED', reason: 'Fictional damage' } }))
+  await page.route('**/api/evidence/stock-requests/40', route => {
+    if (route.request().method() === 'POST') {
+      uploadCount++
+      expect(route.request().headers()['content-type']).toContain('multipart/form-data; boundary=')
+      const body = route.request().postDataBuffer()!
+      expect(body.includes(Buffer.from('filename="qa-evidence.png"'))).toBe(true)
+      expect(body.includes(png)).toBe(true)
+      uploaded = true
+      return route.fulfill({ status: 201, json: { id: '60' } })
+    }
+    return route.fulfill({ json: { items: uploaded ? [{ id: '60', filename: 'qa-evidence.png' }] : [] } })
+  })
+  await page.goto('/stock-requests/40')
+  await page.getByLabel('Email').fill('manager@example.com')
+  await page.getByLabel('Password').fill('example-password')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  const picker = page.getByLabel('Evidence file', { exact: true })
+  await expect(picker).toBeVisible({ timeout: 3000 })
+  await expect(page.getByRole('button', { name: 'Upload evidence' })).toBeDisabled()
+  await picker.setInputFiles({ name: 'too-large.png', mimeType: 'image/png', buffer: Buffer.alloc(5 * 1024 * 1024 + 1) })
+  await page.getByRole('button', { name: 'Upload evidence' }).click()
+  await expect(page.getByRole('alert')).toHaveText('Evidence must be 5 MB or smaller.')
+  expect(uploadCount).toBe(0)
+  await picker.setInputFiles({ name: 'qa-evidence.png', mimeType: 'image/png', buffer: png })
+  await page.getByRole('button', { name: 'Upload evidence' }).click()
+  await expect(page.getByRole('link', { name: 'qa-evidence.png' })).toHaveAttribute('href', '/api/evidence/60/file')
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Upload evidence' })).toBeDisabled()
+  expect(uploadCount).toBe(1)
+  await page.getByRole('combobox', { name: 'Language' }).selectOption('vi')
+  await expect(page.getByLabel('Tệp minh chứng', { exact: true })).toBeVisible()
+})
+
 test('excess discrepancy defaults to a valid resolution and clears after resolving', async ({ page }) => {
   await mockSession(page)
   let resolved = false

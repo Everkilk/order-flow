@@ -142,9 +142,10 @@ export function Evidence({ target, id }: { target: 'discrepancies' | 'stock-requ
   const [error, setError] = useState<unknown>()
   async function upload(event: FormEvent) {
     event.preventDefault(); if (!file) return
+    setError(undefined)
     if (file.size > 5 * 1024 * 1024) { setError(new Error('Evidence must be 5 MB or smaller.')); return }
     const body = new FormData(); body.set('file', file)
     try { await api(`/evidence/${target}/${id}`, { method: 'POST', body }); setFile(null); await query.refetch() } catch (e) { setError(e) }
   }
-  return <div className="evidence"><h3>{t("Evidence")}</h3>{query.data?.items.map(row => <a key={row.id} href={`/api/evidence/${row.id}/file`} target="_blank" rel="noreferrer">{row.filename}</a>)}<form onSubmit={upload} className="stack"><input type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /><Notice error={error} /><button className="button subtle" disabled={!file}>{t("Upload evidence")}</button></form></div>
+  return <div className="evidence"><h3>{t("Evidence")}</h3>{query.data?.items.map(row => <a key={row.id} href={`/api/evidence/${row.id}/file`} target="_blank" rel="noreferrer">{row.filename}</a>)}<form onSubmit={upload} className="stack"><Field label="Evidence file"><input type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field><Notice error={error} /><button className="button subtle" disabled={!file}>{t("Upload evidence")}</button></form></div>
 }

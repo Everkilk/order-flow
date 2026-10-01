@@ -97,7 +97,7 @@ const vietnamese: Record<string, string> = {
   'Discrepancies': 'Sai lệch', 'No discrepancies reported.': 'Chưa có sai lệch.',
   'Receive transfer': 'Nhận hàng chuyển', 'Record receipt': 'Ghi nhận hàng',
   'Report shortage': 'Báo thiếu hàng', 'Resolve': 'Xử lý',
-  'Evidence': 'Minh chứng', 'Upload evidence': 'Tải minh chứng',
+  'Evidence': 'Minh chứng', 'Evidence file': 'Tệp minh chứng', 'Upload evidence': 'Tải minh chứng',
   'Search by SKU or name, choose a product, then save the lines before posting or confirming.': 'Tìm theo SKU hoặc tên, chọn sản phẩm, rồi lưu các dòng trước khi ghi kho hoặc xác nhận.',
   'Showing the first 25 matches. Search to narrow the list.': 'Đang hiện 25 kết quả đầu. Hãy tìm cụ thể hơn.',
   'Choose': 'Chọn', 'Choose warehouse': 'Chọn kho', 'Choose category': 'Chọn danh mục',
