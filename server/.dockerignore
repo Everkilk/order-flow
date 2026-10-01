@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-tests
+data
+.env
+.env.production
+.env.production.example
+tests
+examples
+*.log

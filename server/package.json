@@ -1,0 +1,60 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.20.0"
+  },
+  "scripts": {
+    "test": "npm run typecheck && npm run db:test && npm run api:test && npm run build && npm run storage:test && npm run demo:test",
+    "dev": "node --env-file=.env --import tsx --watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node --env-file=.env dist/index.js",
+    "worker": "node --env-file=.env dist/worker.js",
+    "prebenchmark:search": "npm run build",
+    "benchmark:search": "node --env-file=.env scripts/benchmark-search.mjs",
+    "prebenchmark:movements": "npm run build",
+    "benchmark:movements": "node --env-file=.env scripts/benchmark-movements.mjs",
+    "prebenchmark:orders": "npm run build",
+    "benchmark:orders": "node --env-file=.env scripts/benchmark-orders.mjs",
+    "api:test": "node node_modules/esbuild/bin/esbuild tests/api.test.ts --bundle --platform=node --format=esm --packages=external --external:../scripts/* --outfile=dist-tests/api.test.mjs && node --env-file=.env --test dist-tests/api.test.mjs",
+    "demo:test": "node --env-file=.env --test tests/demo.test.mjs",
+    "storage:test": "node --test tests/storage.test.mjs",
+    "setup:admin": "node --env-file=.env scripts/setup-admin.mjs",
+    "db:create": "node --env-file=.env scripts/db.mjs create",
+    "db:migrate": "node --env-file=.env scripts/db.mjs migrate",
+    "db:status": "node --env-file=.env scripts/db.mjs status",
+    "db:erd": "node --env-file=.env scripts/export-erd.mjs",
+    "predb:demo": "npm run build",
+    "db:demo": "node --env-file=.env scripts/db-demo.mjs",
+    "db:test": "node --env-file=.env --test tests/schema.test.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1143.0",
+    "@aws-sdk/lib-storage": "^3.1143.0",
+    "@node-rs/argon2": "^2.2.1",
+    "busboy": "^1.6.0",
+    "csv-parse": "^7.0.3",
+    "csv-stringify": "^6.9.0",
+    "decimal.js": "^10.6.0",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}

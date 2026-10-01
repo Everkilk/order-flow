@@ -141,3 +141,13 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# OrderFlow build, test, local data, and deployment secrets
+.npm-cache/
+test-results/
+playwright-report/
+dist-tests/
+server/data/
+server/.env.production
+!server/.env.production.example
+*.local

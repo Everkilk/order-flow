@@ -1,0 +1,165 @@
+erDiagram
+    direction LR
+    CATEGORIES ||--o{ PRODUCTS : classifies
+    CATEGORIES ||--o{ CATEGORY_ATTRIBUTES : defines
+    UNITS ||--o{ PRODUCTS : measures
+    PRODUCTS ||--o{ PRODUCT_SUPPLIERS : sourced_by
+    SUPPLIERS ||--o{ PRODUCT_SUPPLIERS : supplies
+    PRODUCTS ||--o{ INVENTORY_BALANCES : stocked_as
+    WAREHOUSES ||--o{ INVENTORY_BALANCES : holds
+    USERS ||--o{ ORDERS : creates
+    ORDERS ||--|{ ORDER_ITEMS : contains
+    PRODUCTS ||--o{ ORDER_ITEMS : ordered_as
+    WAREHOUSES ||--o{ ORDER_ITEMS : sourced_from
+    USERS ||--o{ INVENTORY_EVENTS : performs
+    INVENTORY_EVENTS ||--|{ INVENTORY_LEDGER : contains
+    PRODUCTS ||--o{ INVENTORY_LEDGER : changed_in
+    WAREHOUSES ||--o{ INVENTORY_LEDGER : changed_in
+    ORDER_ITEMS o|--o{ INVENTORY_LEDGER : traced_by
+    USERS ||--o{ TRANSFERS : creates
+    WAREHOUSES ||--o{ TRANSFERS : sends_from
+    WAREHOUSES ||--o{ TRANSFERS : receives_at
+    TRANSFERS ||--|{ TRANSFER_ITEMS : contains
+    PRODUCTS ||--o{ TRANSFER_ITEMS : moved_as
+    TRANSFERS ||--o{ TRANSFER_RECEIPTS : receives_in
+    USERS ||--o{ TRANSFER_RECEIPTS : counts
+    TRANSFER_RECEIPTS ||--|{ TRANSFER_RECEIPT_ITEMS : records
+    TRANSFER_ITEMS ||--o{ TRANSFER_RECEIPT_ITEMS : counted_as
+    TRANSFER_ITEMS ||--o{ TRANSFER_DISCREPANCIES : may_raise
+    TRANSFER_DISCREPANCIES ||--o{ DISCREPANCY_RESOLUTIONS : resolved_by
+    USERS ||--o{ DISCREPANCY_RESOLUTIONS : decides
+
+    CATEGORIES {
+        bigint id PK
+        text name
+        bool active
+    }
+    CATEGORY_ATTRIBUTES {
+        bigint id PK
+        bigint category_id FK
+        text key
+        text data_type
+        bool required
+    }
+    UNITS {
+        bigint id PK
+        text code UK
+        int decimal_places
+    }
+    PRODUCTS {
+        bigint id PK
+        text sku UK
+        text barcode UK
+        text name
+        bigint category_id FK
+        bigint unit_id FK
+        jsonb attributes
+        bool active
+    }
+    SUPPLIERS {
+        bigint id PK
+        text name
+        bool active
+    }
+    PRODUCT_SUPPLIERS {
+        bigint product_id PK, FK
+        bigint supplier_id PK, FK
+        text supplier_sku
+        bool primary_supplier
+    }
+    WAREHOUSES {
+        bigint id PK
+        text code UK
+        text name
+        bool active
+    }
+    INVENTORY_BALANCES {
+        bigint warehouse_id PK, FK
+        bigint product_id PK, FK
+        decimal on_hand
+        decimal reserved
+        bigint version
+    }
+    USERS {
+        bigint id PK
+        text email UK
+        text role
+        bool active
+    }
+    ORDERS {
+        bigint id PK
+        text order_number UK
+        bigint created_by FK
+        text status
+        datetime confirmed_at
+    }
+    ORDER_ITEMS {
+        bigint id PK
+        bigint order_id FK
+        bigint product_id FK
+        bigint warehouse_id FK
+        decimal quantity
+    }
+    INVENTORY_EVENTS {
+        bigint id PK
+        text event_type
+        bigint actor_id FK
+        uuid idempotency_key UK
+        datetime occurred_at
+        text reason
+    }
+    INVENTORY_LEDGER {
+        bigint id PK
+        bigint event_id FK
+        bigint product_id FK
+        bigint warehouse_id FK
+        bigint order_item_id FK
+        decimal on_hand_delta
+        decimal reserved_delta
+    }
+    TRANSFERS {
+        bigint id PK
+        bigint source_warehouse_id FK
+        bigint destination_warehouse_id FK
+        bigint created_by FK
+        text status
+        datetime sent_at
+    }
+    TRANSFER_ITEMS {
+        bigint id PK
+        bigint transfer_id FK
+        bigint product_id FK
+        decimal requested_qty
+        decimal sent_qty
+    }
+    TRANSFER_RECEIPTS {
+        bigint id PK
+        bigint transfer_id FK
+        bigint received_by FK
+        uuid idempotency_key UK
+        datetime received_at
+        text document_ref
+    }
+    TRANSFER_RECEIPT_ITEMS {
+        bigint id PK
+        bigint receipt_id FK
+        bigint transfer_item_id FK
+        decimal counted_qty
+        decimal accepted_qty
+        decimal quarantined_qty
+    }
+    TRANSFER_DISCREPANCIES {
+        bigint id PK
+        bigint transfer_item_id FK
+        text kind
+        decimal reported_qty
+        text status
+    }
+    DISCREPANCY_RESOLUTIONS {
+        bigint id PK
+        bigint discrepancy_id FK
+        bigint manager_id FK
+        text resolution_type
+        decimal quantity
+        text reason
+    }
