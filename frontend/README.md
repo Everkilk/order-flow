@@ -25,4 +25,4 @@ The Playwright suite uses mocked API responses to check key browser flows and do
 
 ## Deploy to Vercel
 
-Set the Vercel project root directory to `frontend`, output directory to `dist`, and build-time `ORDERFLOW_API_ORIGIN` to the HTTPS Render API origin. `vercel.mjs` proxies `/api` and handles direct SPA links. Read [the deployment guide](../docs/deployment.md) for cookie, preview, storage, and release checks.
+Set the Vercel project root directory to `frontend` and output directory to `dist`. `vercel.json` proxies `/api` to the demo Render API and handles direct SPA links. Update its API destination if the Render URL changes. Read [the deployment guide](../docs/deployment.md) for cookie, preview, storage, and release checks.

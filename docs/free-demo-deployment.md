@@ -41,7 +41,7 @@ Set these environment variables on the web service. Enter credentials in Render'
 
 `APP_ORIGIN` must match the final Vercel URL. If it changes, update the Render variable and redeploy. The S3 bucket can be in a different region from Render for this demo; use its actual region code. Do not configure public bucket access or browser-side AWS credentials.
 
-After Render reports a successful deployment, check `https://YOUR-RENDER-HOST/health/ready`. It should report ready. The API's actual HTTPS URL becomes Vercel's `ORDERFLOW_API_ORIGIN` value. Configure Vercel as described in [deployment.md](deployment.md#vercel-frontend).
+After Render reports a successful deployment, check `https://YOUR-RENDER-HOST/health/ready`. It should report ready. Set the API HTTPS origin in `frontend/vercel.json` before deploying Vercel; this demo currently uses `https://order-flow-dz0k.onrender.com`. Configure Vercel as described in [deployment.md](deployment.md#vercel-frontend).
 
 ## Initial manager without a Render shell
 
