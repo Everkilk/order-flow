@@ -426,8 +426,13 @@ for (const kind of ['orders', 'returns', 'transfers'] as const) {
     }
     if (kind === 'transfers') {
       await page.getByLabel('Accept', { exact: true }).fill('2')
+      await page.getByLabel('Quarantine excess', { exact: true }).fill('1')
+      await expect(page.getByLabel('Excess reason', { exact: true })).toBeVisible()
+      await expect(page.getByLabel('Excess reason', { exact: true })).toHaveAttribute('required', '')
+      await page.getByLabel('Quarantine excess', { exact: true }).fill('0.000000')
+      await expect(page.getByLabel('Excess reason', { exact: true })).toHaveCount(0)
       await page.getByRole('button', { name: 'Record receipt', exact: true }).click()
-      expect(requests.find(request => request.path.endsWith('/receive'))?.body).toMatchObject({ items: [{ transferItemId: '31', acceptedQty: '2', quarantinedQty: '0' }] })
+      expect(requests.find(request => request.path.endsWith('/receive'))?.body).toEqual({ note: null, items: [{ transferItemId: '31', acceptedQty: '2', quarantinedQty: '0.000000' }] })
     }
     await expect(page.locator('.summary-row').filter({ has: page.getByText('Status', { exact: true }) })).toContainText(kind === 'orders' ? 'FULFILLED' : kind === 'returns' ? 'POSTED' : 'RECEIVED')
     await expect(page.getByRole('button', { name: 'Save lines', exact: true })).toHaveCount(0)
