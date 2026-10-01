@@ -78,8 +78,9 @@ tr:hover td { background: #fafcfe; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid #dde6ef; margin-bottom: 20px; }
 .tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 11px 16px; color: #587187; }
 .tab.active { border-bottom-color: #286b9e; color: #1c537f; font-weight: 700; }
-.modal-backdrop { position: fixed; inset: 0; background: #10283b8c; display: flex; justify-content: flex-end; z-index: 10; }
 .drawer { height: 100vh; width: min(620px, 100vw); border-radius: 0; overflow-y: auto; margin: 0; }
+dialog.drawer { position: fixed; inset: 0 0 0 auto; max-height: none; max-width: none; border: 0; color: inherit; }
+dialog.drawer::backdrop { background: #10283b8c; }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; }
 .line-editor { border: 1px solid #dfe8f0; border-radius: 8px; padding: 14px; display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .line-editor .field { flex: 1; min-width: 130px; }

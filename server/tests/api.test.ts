@@ -191,6 +191,10 @@ test('reference maintenance, product revision, and stock pagination', async () =
   assert.equal(dashboard.response.status,200);
   assert.ok(dashboard.data.work);
   assert.ok(dashboard.data.valuation);
+  const expectedOrders=await client.query("SELECT count(*)::text AS count FROM orderflow.orders WHERE status='CONFIRMED'");
+  const expectedTransfers=await client.query("SELECT count(*)::text AS count FROM orderflow.transfers WHERE status IN ('SENT','PARTIALLY_RECEIVED','DISPUTED')");
+  assert.equal(dashboard.data.work.orders.awaitingFulfillment,expectedOrders.rows[0].count);
+  assert.equal(dashboard.data.work.transfers.awaitingReceipt,expectedTransfers.rows[0].count);
 });
 
 test('stock availability filter treats fully reserved units as out of stock', async () => {

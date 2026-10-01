@@ -1,6 +1,7 @@
 export type Locale = 'en' | 'vi'
 
 const vietnamese: Record<string, string> = {
+  'Export failed. Request a new export.': 'Xuất dữ liệu thất bại. Hãy yêu cầu xuất lại.',
   'Overview': 'Tổng quan', 'Products': 'Sản phẩm', 'Stock': 'Tồn kho',
   'Receipts': 'Phiếu nhập', 'Orders': 'Đơn hàng', 'Returns': 'Hàng trả',
   'Transfers': 'Chuyển kho', 'Approvals': 'Phê duyệt', 'Movements': 'Biến động kho',

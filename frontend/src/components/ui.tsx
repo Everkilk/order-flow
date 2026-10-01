@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import type { ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { messageOf } from '../lib/api'
 import { t } from '../app/locale'
 
@@ -9,6 +9,33 @@ export function PageHeading({ title, description, action }: { title: string; des
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <section className={`card ${className}`}>{children}</section>
+}
+
+export function Drawer({ title, children }: { title: string; children: ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
+  useEffect(() => {
+    const element = dialog.current
+    if (!element) return
+    const previous = document.activeElement
+    element.showModal()
+    return () => {
+      element.close()
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus()
+    }
+  }, [])
+  return <dialog ref={dialog} className="card drawer" aria-labelledby={titleId} aria-modal="true" onKeyDown={event => {
+    if (event.key !== 'Tab') return
+    const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex]')]
+      .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0)
+    const first = controls[0], last = controls.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+  }} onCancel={event => {
+    event.preventDefault()
+    // Use the form's close action so Escape respects its unsaved-change guard.
+    dialog.current?.querySelector<HTMLButtonElement>('button[data-dialog-close]')?.click()
+  }}><div className="drawer-head"><h2 id={titleId}>{t(title)}</h2></div>{children}</dialog>
 }
 
 export function Notice({ error, success }: { error?: unknown; success?: string }) {

@@ -24,7 +24,7 @@ export function dashboardRoutes(pool:pg.Pool):Router {
     const [orders,transfers,requests,valuation]=await Promise.all([
       pool.query(`SELECT
         count(*) FILTER (WHERE o.status='DRAFT')::text AS drafts,
-        count(*) FILTER (WHERE o.status='CONFIRMED')::text AS awaitingFulfillment
+        count(*) FILTER (WHERE o.status='CONFIRMED')::text AS "awaitingFulfillment"
         FROM orderflow.orders o
         WHERE o.status IN ('DRAFT','CONFIRMED')
           AND ($1 OR o.created_by=$2 OR o.assigned_to=$2)
@@ -33,7 +33,7 @@ export function dashboardRoutes(pool:pg.Pool):Router {
       [actor.role==='MANAGER',actor.id,actor.warehouses]),
       pool.query(`SELECT
         count(*) FILTER (WHERE t.status IN ('SENT','PARTIALLY_RECEIVED','DISPUTED')
-          AND ($1 OR t.destination_warehouse_id=ANY($2::bigint[])))::text AS awaitingReceipt,
+          AND ($1 OR t.destination_warehouse_id=ANY($2::bigint[])))::text AS "awaitingReceipt",
         count(*) FILTER (WHERE t.status='DISPUTED'
           AND ($1 OR t.source_warehouse_id=ANY($2::bigint[]) OR t.destination_warehouse_id=ANY($2::bigint[])))::text AS disputed
         FROM orderflow.transfers t WHERE t.status IN ('SENT','PARTIALLY_RECEIVED','DISPUTED')`,
