@@ -1,3 +1,5 @@
+import { presentNumbers } from './numbers'
+
 export class ApiError extends Error {
   status: number
   code: string
@@ -47,7 +49,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     }
     throw new ApiError(response.status, error?.code ?? 'REQUEST_FAILED', error?.message ?? 'Request failed.')
   }
-  return body as T
+  return presentNumbers(body) as T
 }
 
 export function json(method: 'POST' | 'PUT' | 'PATCH', body: unknown, key?: string): RequestInit {

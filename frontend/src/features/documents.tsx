@@ -1,3 +1,4 @@
+import { useViewState } from '../lib/view-state'
 import { t } from '../app/locale'
 import { useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -21,7 +22,7 @@ const titles: Record<DocumentKind, string> = { receipts: 'Receipts', orders: 'Or
 const numberKeys: Record<DocumentKind, keyof DocRow> = { receipts: 'receiptNumber', orders: 'orderNumber', returns: 'returnNumber', transfers: 'transferNumber' }
 
 export function DocumentList({ kind }: { kind: DocumentKind }) {
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useViewState('status', '')
   const [creating, setCreating] = useState(false)
   const query = usePage<DocRow>(`/${kind}`, { status })
   const warehouses = useOptions<Warehouse>('/warehouses')
@@ -91,6 +92,7 @@ function LineEditor({ kind, doc, onSaved }: { kind: DocumentKind; doc: Document;
 }
 
 function TransferProgress({ doc, onChanged }: { doc: Document; onChanged: () => void }) {
+  const { markDirty, markClean } = useUnsavedDraft()
   const { user } = useSession()
   const [accepted, setAccepted] = useState<Record<string, string>>({})
   const [quarantined, setQuarantined] = useState<Record<string, string>>({})
@@ -103,12 +105,13 @@ function TransferProgress({ doc, onChanged }: { doc: Document; onChanged: () => 
   async function receive(event: FormEvent) {
     event.preventDefault(); setError(undefined)
     const items = doc.items.filter(line => accepted[line.id ?? ''] || quarantined[line.id ?? '']).map(line => ({ transferItemId: line.id, acceptedQty: accepted[line.id ?? ''] || '0', quarantinedQty: quarantined[line.id ?? ''] || '0', ...(Number(quarantined[line.id ?? ''] ?? '0') > 0 ? { excessReason: excessReason[line.id ?? ''] } : {}) }))
-    try { await api(`/transfers/${doc.id}/receive`, json('POST', { note: note || null, items }, key)); setKey(commandKey()); onChanged(); await discrepancies.refetch() } catch (e) { setError(e) }
+    try { await api(`/transfers/${doc.id}/receive`, json('POST', { note: note || null, items }, key)); markClean(); setAccepted({}); setQuarantined({}); setExcessReason({}); setNote(''); setKey(commandKey()); onChanged(); await discrepancies.refetch() } catch (e) { setError(e) }
   }
-  return <><div className="grid-two">{canReceive && ['SENT','PARTIALLY_RECEIVED','DISPUTED'].includes(doc.status) && <Card><h2>{t("Receive transfer")}</h2><form className="stack" onSubmit={receive}>{doc.items.map(line => <div className="line-editor" key={line.id}><strong>Product #{line.productId}</strong><span>In transit: {line.inTransitQty}</span><Field label="Accept"><input inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={accepted[line.id ?? ''] ?? ''} onChange={event => setAccepted(old => ({ ...old, [line.id ?? '']: event.target.value }))} /></Field><Field label="Quarantine excess"><input inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={quarantined[line.id ?? ''] ?? ''} onChange={event => setQuarantined(old => ({ ...old, [line.id ?? '']: event.target.value }))} /></Field>{Number(quarantined[line.id ?? ''] ?? '0') > 0 && <Field label="Excess reason"><input required value={excessReason[line.id ?? ''] ?? ''} onChange={event => setExcessReason(old => ({ ...old, [line.id ?? '']: event.target.value }))} /></Field>}</div>)}<Field label="Note"><textarea value={note} onChange={event => setNote(event.target.value)} /></Field><Notice error={error} /><button className="button primary">{t("Record receipt")}</button></form></Card>}<Card><h2>{t("Discrepancies")}</h2>{discrepancies.isPending ? <Loading /> : discrepancies.error ? <Notice error={discrepancies.error} /> : discrepancies.data.items.length ? discrepancies.data.items.map(row => <DiscrepancyCard key={row.id} row={row} transferId={doc.id} onChanged={() => { void discrepancies.refetch(); onChanged() }} />) : <p>{t("No discrepancies reported.")}</p>}</Card></div>{canReceive && ['SENT','PARTIALLY_RECEIVED','DISPUTED'].includes(doc.status) && <Card><h2>{t("Report shortage")}</h2>{doc.items.filter(line => Number(line.inTransitQty ?? '0') > 0).map(line => <div className="summary-row" key={line.id}><span>{line.sku ?? line.productId} · In transit {line.inTransitQty}</span><ShortageForm transferId={doc.id} itemId={line.id!} onChanged={() => { void discrepancies.refetch(); onChanged() }} /></div>)}</Card>}</>
+  return <><div className="grid-two">{canReceive && ['SENT','PARTIALLY_RECEIVED','DISPUTED'].includes(doc.status) && <Card><h2>{t("Receive transfer")}</h2><form onChange={markDirty} className="stack" onSubmit={receive}>{doc.items.map(line => <div className="line-editor" key={line.id}><strong>Product #{line.productId}</strong><span>In transit: {line.inTransitQty}</span><Field label="Accept"><input inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={accepted[line.id ?? ''] ?? ''} onChange={event => setAccepted(old => ({ ...old, [line.id ?? '']: event.target.value }))} /></Field><Field label="Quarantine excess"><input inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={quarantined[line.id ?? ''] ?? ''} onChange={event => setQuarantined(old => ({ ...old, [line.id ?? '']: event.target.value }))} /></Field>{Number(quarantined[line.id ?? ''] ?? '0') > 0 && <Field label="Excess reason"><input required value={excessReason[line.id ?? ''] ?? ''} onChange={event => setExcessReason(old => ({ ...old, [line.id ?? '']: event.target.value }))} /></Field>}</div>)}<Field label="Note"><textarea value={note} onChange={event => setNote(event.target.value)} /></Field><Notice error={error} /><button className="button primary">{t("Record receipt")}</button></form></Card>}<Card><h2>{t("Discrepancies")}</h2>{discrepancies.isPending ? <Loading /> : discrepancies.error ? <Notice error={discrepancies.error} /> : discrepancies.data.items.length ? discrepancies.data.items.map(row => <DiscrepancyCard key={row.id} row={row} transferId={doc.id} onChanged={() => { void discrepancies.refetch(); onChanged() }} />) : <p>{t("No discrepancies reported.")}</p>}</Card></div>{canReceive && ['SENT','PARTIALLY_RECEIVED','DISPUTED'].includes(doc.status) && <Card><h2>{t("Report shortage")}</h2>{doc.items.filter(line => Number(line.inTransitQty ?? '0') > 0).map(line => <div className="summary-row" key={line.id}><span>{line.sku ?? line.productId} · In transit {line.inTransitQty}</span><ShortageForm transferId={doc.id} itemId={line.id!} onChanged={() => { void discrepancies.refetch(); onChanged() }} /></div>)}</Card>}</>
 }
 
 function DiscrepancyCard({ row, transferId, onChanged }: { row: Discrepancy; transferId: string; onChanged: () => void }) {
+  const { markDirty, markClean } = useUnsavedDraft()
   const { user } = useSession()
   const [quantity, setQuantity] = useState('')
   const [reason, setReason] = useState('')
@@ -118,12 +121,13 @@ function DiscrepancyCard({ row, transferId, onChanged }: { row: Discrepancy; tra
   const [key, setKey] = useState(commandKey)
   async function resolve(event: FormEvent) {
     event.preventDefault(); setError(undefined)
-    try { await api(`/discrepancies/${row.id}/resolve`, json('POST', { resolutionType, quantity, reason, ...(resolutionType === 'LATER_RECEIPT' ? { laterReceiptItemId } : {}) }, key)); setKey(commandKey()); onChanged() } catch (e) { setError(e) }
+    try { await api(`/discrepancies/${row.id}/resolve`, json('POST', { resolutionType, quantity, reason, ...(resolutionType === 'LATER_RECEIPT' ? { laterReceiptItemId } : {}) }, key)); markClean(); setKey(commandKey()); onChanged() } catch (e) { setError(e) }
   }
-  return <div className="discrepancy"><strong>{row.kind} #{row.id}</strong><p>Outstanding: {row.outstandingQty} · {row.reason}</p>{row.kind === 'SHORTAGE' && Number(row.outstandingQty) > 0 && <ShortageForm transferId={transferId} itemId={row.transferItemId} onChanged={onChanged} />}{user?.role === 'MANAGER' && Number(row.outstandingQty) > 0 && <form className="stack" onSubmit={resolve}><Field label="Resolution"><select value={resolutionType} onChange={event => setResolution(event.target.value)}>{(row.kind === 'SHORTAGE' ? ['LOSS','DISPATCH_CORRECTION','LATER_RECEIPT'] : ['ACCEPT_EXCESS','RETURN_EXCESS']).map(value => <option key={value}>{value}</option>)}</select></Field><Field label="Quantity"><input required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={quantity} onChange={event => setQuantity(event.target.value)} /></Field>{resolutionType === 'LATER_RECEIPT' && <Field label="Later receipt item ID"><input required pattern="[1-9][0-9]*" value={laterReceiptItemId} onChange={event => setLaterReceipt(event.target.value)} /></Field>}<Field label="Reason"><textarea required value={reason} onChange={event => setReason(event.target.value)} /></Field><Notice error={error} /><button className="button">{t("Resolve")}</button></form>}<Evidence target="discrepancies" id={row.id} /></div>
+  return <div className="discrepancy"><strong>{row.kind} #{row.id}</strong><p>Outstanding: {row.outstandingQty} · {row.reason}</p>{row.kind === 'SHORTAGE' && Number(row.outstandingQty) > 0 && <ShortageForm transferId={transferId} itemId={row.transferItemId} onChanged={onChanged} />}{user?.role === 'MANAGER' && Number(row.outstandingQty) > 0 && <form onChange={markDirty} className="stack" onSubmit={resolve}><Field label="Resolution"><select value={resolutionType} onChange={event => setResolution(event.target.value)}>{(row.kind === 'SHORTAGE' ? ['LOSS','DISPATCH_CORRECTION','LATER_RECEIPT'] : ['ACCEPT_EXCESS','RETURN_EXCESS']).map(value => <option key={value}>{value}</option>)}</select></Field><Field label="Quantity"><input required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={quantity} onChange={event => setQuantity(event.target.value)} /></Field>{resolutionType === 'LATER_RECEIPT' && <Field label="Later receipt item ID"><input required pattern="[1-9][0-9]*" value={laterReceiptItemId} onChange={event => setLaterReceipt(event.target.value)} /></Field>}<Field label="Reason"><textarea required value={reason} onChange={event => setReason(event.target.value)} /></Field><Notice error={error} /><button className="button">{t("Resolve")}</button></form>}<Evidence target="discrepancies" id={row.id} /></div>
 }
 
 function ShortageForm({ transferId, itemId, onChanged }: { transferId: string; itemId: string; onChanged?: () => void }) {
+  const { markDirty, markClean } = useUnsavedDraft()
   const [show, setShow] = useState(false)
   const [quantity, setQuantity] = useState('')
   const [reason, setReason] = useState('')
@@ -131,12 +135,13 @@ function ShortageForm({ transferId, itemId, onChanged }: { transferId: string; i
   const [key, setKey] = useState(commandKey)
   async function submit(event: FormEvent) {
     event.preventDefault(); setError(undefined)
-    try { await api(`/transfers/${transferId}/shortages`, json('POST', { transferItemId: itemId, quantity, reason }, key)); setKey(commandKey()); setShow(false); onChanged?.() } catch (e) { setError(e) }
+    try { await api(`/transfers/${transferId}/shortages`, json('POST', { transferItemId: itemId, quantity, reason }, key)); markClean(); setKey(commandKey()); setShow(false); onChanged?.() } catch (e) { setError(e) }
   }
-  return <>{!show ? <button className="button subtle" onClick={() => setShow(true)}>{t("Report shortage")}</button> : <form className="stack" onSubmit={submit}><Field label="Quantity"><input required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={quantity} onChange={event => setQuantity(event.target.value)} /></Field><Field label="Reason"><input required value={reason} onChange={event => setReason(event.target.value)} /></Field><Notice error={error} /><button className="button">{t("Report shortage")}</button></form>}</>
+  return <>{!show ? <button className="button subtle" onClick={() => setShow(true)}>{t("Report shortage")}</button> : <form onChange={markDirty} className="stack" onSubmit={submit}><Field label="Quantity"><input required inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,6})?" value={quantity} onChange={event => setQuantity(event.target.value)} /></Field><Field label="Reason"><input required value={reason} onChange={event => setReason(event.target.value)} /></Field><Notice error={error} /><button className="button">{t("Report shortage")}</button></form>}</>
 }
 
 export function Evidence({ target, id }: { target: 'discrepancies' | 'stock-requests'; id: string }) {
+  const { markDirty, markClean } = useUnsavedDraft()
   const query = useQuery({ queryKey: ['evidence', target, id], queryFn: () => api<{ items: { id: string; filename: string }[] }>(`/evidence/${target}/${id}`) })
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<unknown>()
@@ -145,7 +150,7 @@ export function Evidence({ target, id }: { target: 'discrepancies' | 'stock-requ
     setError(undefined)
     if (file.size > 5 * 1024 * 1024) { setError(new Error('Evidence must be 5 MB or smaller.')); return }
     const body = new FormData(); body.set('file', file)
-    try { await api(`/evidence/${target}/${id}`, { method: 'POST', body }); setFile(null); await query.refetch() } catch (e) { setError(e) }
+    try { await api(`/evidence/${target}/${id}`, { method: 'POST', body }); markClean(); setFile(null); await query.refetch() } catch (e) { setError(e) }
   }
-  return <div className="evidence"><h3>{t("Evidence")}</h3>{query.data?.items.map(row => <a key={row.id} href={`/api/evidence/${row.id}/file`} target="_blank" rel="noreferrer">{row.filename}</a>)}<form onSubmit={upload} className="stack"><Field label="Evidence file"><input type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field><Notice error={error} /><button className="button subtle" disabled={!file}>{t("Upload evidence")}</button></form></div>
+  return <div className="evidence"><h3>{t("Evidence")}</h3>{query.data?.items.map(row => <a key={row.id} href={`/api/evidence/${row.id}/file`} target="_blank" rel="noreferrer">{row.filename}</a>)}<form onChange={markDirty} onSubmit={upload} className="stack"><Field label="Evidence file"><input type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field><Notice error={error} /><button className="button subtle" disabled={!file}>{t("Upload evidence")}</button></form></div>
 }

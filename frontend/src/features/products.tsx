@@ -1,3 +1,4 @@
+import { useViewState } from '../lib/view-state'
 import { t } from '../app/locale'
 import { useEffect, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -6,7 +7,7 @@ import { useSession } from '../app/session-context'
 import { Card, DataTable, Drawer, Field, Loading, Notice, PageHeading, Pager, RecordLink } from '../components/ui'
 import { api, json, type Page } from '../lib/api'
 import { useOptions, usePage } from '../lib/queries'
-import { useUnsavedDraft } from '../lib/unsaved'
+import { confirmDiscard, useUnsavedDraft } from '../lib/unsaved'
 
 type Category = { id: string; name: string }
 type Unit = { id: string; code: string; name: string }
@@ -17,7 +18,7 @@ type ProductRow = Pick<Product, 'id' | 'sku' | 'name' | 'categoryId' | 'imageUrl
 export function Products() {
   const { user } = useSession()
   const [params, setParams] = useSearchParams()
-  const [searchDraft, setSearchDraft] = useState({ source: params.get('q') ?? '', value: params.get('q') ?? '' })
+  const [searchDraft, setSearchDraft] = useViewState('searchDraft', { source: params.get('q') ?? '', value: params.get('q') ?? '' })
   const [showCreate, setShowCreate] = useState(false)
   const q = params.get('q') ?? ''
   const categoryId = params.get('categoryId') ?? ''
@@ -40,10 +41,11 @@ export function ProductDetail() {
   if (query.isPending) return <Loading />
   if (query.error) return <Notice error={query.error} />
   const product = query.data
-  return <><PageHeading title={product.name} description={`SKU ${product.sku} · ${product.category}`} action={user?.role === 'MANAGER' && !editing ? <button className="button primary" onClick={() => setEditing(true)}>{t("Edit product")}</button> : undefined} />{editing ? <Card><ProductForm initial={product} onSaved={() => { setEditing(false); void query.refetch() }} onClose={() => setEditing(false)} /></Card> : <div className="grid-two"><Card><h2>{t("Details")}</h2><div className="summary-row"><span>{t("Barcode")}</span><strong>{product.barcode ?? '—'}</strong></div><div className="summary-row"><span>{t("Unit")}</span><strong>{product.unit}</strong></div><div className="summary-row"><span>{t("Price")}</span><strong>{product.sellingPrice ? `${product.sellingPrice} ${product.sellingCurrency}` : '—'}</strong></div><div className="summary-row"><span>{t("Status")}</span><strong>{product.active ? 'Active' : 'Inactive'}</strong></div><p>{product.description}</p>{product.imageUrl && <a href={product.imageUrl} target="_blank" rel="noreferrer">{t("View image")}</a>}<h3>{t("Category attributes")}</h3>{Object.entries(product.attributes).map(([key, value]) => <div className="summary-row" key={key}><span>{key}</span><strong>{String(value)}</strong></div>)}</Card><Card><h2>{t("Warehouse stock")}</h2><DataTable headers={['Warehouse', 'On hand', 'Reserved', 'Available']} rows={(product.stock ?? []).map(row => [row.warehouse, row.onHand, row.reserved, row.available])} /><h2>{t("Suppliers")}</h2><DataTable headers={['Supplier', 'Primary', 'Cost']} rows={(product.suppliers ?? []).map(row => [row.name, row.primarySupplier ? 'Yes' : 'No', row.cost ? `${row.cost} ${row.currency}` : '—'])} />{user?.role === 'MANAGER' && <SupplierEditor product={product} onSaved={() => void query.refetch()} />}</Card></div>}</>
+  return <><PageHeading title={product.name} description={`SKU ${product.sku} · ${product.category}`} action={user?.role === 'MANAGER' && !editing ? <button className="button primary" onClick={() => { if (confirmDiscard()) setEditing(true) }}>{t("Edit product")}</button> : undefined} />{editing ? <Card><ProductForm initial={product} onSaved={() => { setEditing(false); void query.refetch() }} onClose={() => setEditing(false)} /></Card> : <div className="grid-two"><Card><h2>{t("Details")}</h2><div className="summary-row"><span>{t("Barcode")}</span><strong>{product.barcode ?? '—'}</strong></div><div className="summary-row"><span>{t("Unit")}</span><strong>{product.unit}</strong></div><div className="summary-row"><span>{t("Price")}</span><strong>{product.sellingPrice ? `${product.sellingPrice} ${product.sellingCurrency}` : '—'}</strong></div><div className="summary-row"><span>{t("Status")}</span><strong>{product.active ? 'Active' : 'Inactive'}</strong></div><p>{product.description}</p>{product.imageUrl && <a href={product.imageUrl} target="_blank" rel="noreferrer">{t("View image")}</a>}<h3>{t("Category attributes")}</h3>{Object.entries(product.attributes).map(([key, value]) => <div className="summary-row" key={key}><span>{key}</span><strong>{String(value)}</strong></div>)}</Card><Card><h2>{t("Warehouse stock")}</h2><DataTable headers={['Warehouse', 'On hand', 'Reserved', 'Available']} rows={(product.stock ?? []).map(row => [row.warehouse, row.onHand, row.reserved, row.available])} /><h2>{t("Suppliers")}</h2><DataTable headers={['Supplier', 'Primary', 'Cost']} rows={(product.suppliers ?? []).map(row => [row.name, row.primarySupplier ? 'Yes' : 'No', row.cost ? `${row.cost} ${row.currency}` : '—'])} />{user?.role === 'MANAGER' && <SupplierEditor product={product} onSaved={() => void query.refetch()} />}</Card></div>}</>
 }
 
 function SupplierEditor({ product, onSaved }: { product: Product; onSaved: () => void }) {
+  const { markDirty, markClean } = useUnsavedDraft()
   const suppliers = useOptions<{ id: string; name: string }>('/suppliers')
   const [supplierId, setSupplierId] = useState('')
   const [supplierSku, setSupplierSku] = useState('')
@@ -70,11 +72,11 @@ function SupplierEditor({ product, onSaved }: { product: Product; onSaved: () =>
         cost: cost || null,
         currency: cost ? currency : null,
       }))
-      setSuccess('Supplier saved.')
+      markClean(); setSuccess('Supplier saved.')
       onSaved()
     } catch (e) { setError(e) } finally { setBusy(false) }
   }
-  return <><h3>{t("Add or edit supplier")}</h3><form className="stack" onSubmit={submit}>
+  return <><h3>{t("Add or edit supplier")}</h3><form onChange={markDirty} className="stack" onSubmit={submit}>
     <Field label="Supplier"><select required value={supplierId} onChange={event => choose(event.target.value)}><option value="">{t("Choose supplier")}</option>{suppliers.data?.items.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
     <Field label="Supplier SKU"><input value={supplierSku} onChange={event => setSupplierSku(event.target.value)} /></Field>
     <Field label="Primary supplier"><input type="checkbox" checked={primarySupplier} onChange={event => setPrimary(event.target.checked)} /></Field>

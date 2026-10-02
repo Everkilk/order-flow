@@ -1,6 +1,12 @@
 export type Locale = 'en' | 'vi'
 
 const vietnamese: Record<string, string> = {
+  'Back': 'Quay lại', 'Breadcrumb': 'Đường dẫn trang', 'Close menu': 'Đóng trình đơn',
+  'Product details': 'Chi tiết sản phẩm', 'Receipt details': 'Chi tiết phiếu nhập',
+  'Order details': 'Chi tiết đơn hàng', 'Return details': 'Chi tiết hàng trả',
+  'Transfer details': 'Chi tiết chuyển kho', 'Stock request details': 'Chi tiết yêu cầu tồn kho',
+  'Mark all as read': 'Đánh dấu tất cả đã đọc', 'Marking as read…': 'Đang đánh dấu đã đọc…',
+  'All notifications marked as read.': 'Đã đánh dấu tất cả thông báo là đã đọc.',
   'Upload received.': 'Đã nhận tệp tải lên.',
   'Export failed. Request a new export.': 'Xuất dữ liệu thất bại. Hãy yêu cầu xuất lại.',
   'Overview': 'Tổng quan', 'Products': 'Sản phẩm', 'Stock': 'Tồn kho',

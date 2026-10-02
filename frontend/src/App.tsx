@@ -16,6 +16,8 @@ import { Notifications, NotificationCount } from './features/notifications'
 import { Users } from './features/users'
 import { api, json } from './lib/api'
 import { getLocale, setLocale, t } from './app/locale'
+import { NavigationTrail } from './components/NavigationTrail'
+import { confirmDiscard, useUnsavedNavigation } from './lib/unsaved'
 import './App.css'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 15_000, refetchOnWindowFocus: false } } })
@@ -35,7 +37,7 @@ function Login() {
     event.preventDefault(); setBusy(true); setError(undefined)
     try { await login(email, password) } catch (e) { setError(e) } finally { setBusy(false) }
   }
-  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><div className="brand auth-brand"><span className="brand-mark">O</span><span>OrderFlow</span></div><h1>{t('Welcome back')}</h1><p>{t('Sign in to manage your warehouse.')}</p><form onSubmit={submit}><label className="field"><span>{t('Email')}</span><input type="email" required autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} /></label><label className="field"><span>{t('Password')}</span><input type="password" required autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label><Notice error={error} success={passwordChanged ? 'Password changed. Please sign in again.' : undefined} /><button className="button primary full" disabled={busy}>{t(busy ? 'Signing in…' : 'Sign in')}</button></form></Card></div>
+  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><div className="brand auth-brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><h1>{t('Welcome back')}</h1><p>{t('Sign in to manage your warehouse.')}</p><form onSubmit={submit}><label className="field"><span>{t('Email')}</span><input type="email" required autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} /></label><label className="field"><span>{t('Password')}</span><input type="password" required autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label><Notice error={error} success={passwordChanged ? 'Password changed. Please sign in again.' : undefined} /><button className="button primary full" disabled={busy}>{t(busy ? 'Signing in…' : 'Sign in')}</button></form></Card></div>
 }
 
 function ChangePassword() {
@@ -77,11 +79,13 @@ const nav: NavItem[] = [
 ]
 
 function Shell() {
+  useUnsavedNavigation()
+  const [signingOut, setSigningOut] = useState(false)
   const { user, logout } = useSession()
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
   if (!user) return null
-  return <div className="shell"><aside className={`sidebar ${menuOpen ? 'open' : ''}`}><div className="brand"><span className="brand-mark">O</span><span>OrderFlow</span></div><div className="nav-label">WORKSPACE</div><nav aria-label="Main navigation">{nav.filter(item => !item.roles || item.roles.includes(user.role)).map(item => <NavLink key={item.to} end={item.to === '/'} to={item.to} onClick={() => setMenuOpen(false)} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>{t(item.label)}</NavLink>)}</nav><div className="sidebar-footer"><span className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div><strong>{user.displayName}</strong><small>{user.role.toLowerCase()}</small></div></div></aside><div className="main-area"><header className="topbar"><button type="button" className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">☰</button><span className="topbar-title">{t('Warehouse management')}</span><div className="top-actions"><LocaleSelect /><NotificationCount /><button type="button" className="button subtle" onClick={async () => { await logout(); navigate('/') }}>{t('Sign out')}</button></div></header><main><Outlet /></main></div></div>
+  return <div className="shell"><aside className={`sidebar ${menuOpen ? 'open' : ''}`}><button type="button" className="button icon-button menu-close" aria-label={t('Close menu')} onClick={() => setMenuOpen(false)}>×</button><div className="brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><div className="nav-label">WORKSPACE</div><nav aria-label="Main navigation">{nav.filter(item => !item.roles || item.roles.includes(user.role)).map(item => <NavLink key={item.to} end={item.to === '/'} to={item.to} onClick={() => setMenuOpen(false)} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>{t(item.label)}</NavLink>)}</nav><div className="sidebar-footer"><span className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div className="account-name"><strong>{user.displayName}</strong><small>{user.role.toLowerCase()}</small></div><button type="button" className="button icon-button sign-out-button" aria-label={t('Sign out')} title={t('Sign out')} disabled={signingOut} onClick={async () => { if (signingOut || !confirmDiscard()) return; setSigningOut(true); try { await logout() } finally { navigate('/'); setSigningOut(false) } }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 5H4v14h5M14 8l4 4-4 4M8 12h10" /></svg></button></div></aside><div className="main-area"><header className="topbar"><button type="button" className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">☰</button><span className="topbar-title">{t('Warehouse management')}</span><div className="top-actions"><LocaleSelect /><NotificationCount /></div></header><NavigationTrail /><main><Outlet /></main></div></div>
 }
 
 function AuthGate({ children, roles }: { children: ReactNode; roles?: string[] }) {

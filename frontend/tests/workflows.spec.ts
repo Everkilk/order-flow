@@ -1,15 +1,395 @@
 import { test, expect, type Page } from '@playwright/test'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 
-async function mockSession(page: Page, role: 'MANAGER' | 'VIEWER' = 'MANAGER') {
+async function signIn(page: Page) {
+  await page.getByLabel('Email', { exact: true }).fill('manager@example.com')
+  await page.getByLabel('Password', { exact: true }).fill('example-password')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+}
+
+test('Back restores a filtered later product page and breadcrumbs link to the section', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/products**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/products/9') return route.fulfill({ json: { id: '9', sku: 'PAGE2', name: 'Page two drill', categoryId: '1', unitId: '1', category: 'Tools', unit: 'EA', attributes: {}, active: true, revision: '0', stock: [], suppliers: [] } })
+    return route.fulfill({ json: { items: [{ id: '9', sku: url.searchParams.has('cursor') ? 'PAGE2' : 'PAGE1', name: 'Drill', category: 'Tools' }], nextCursor: url.searchParams.has('cursor') ? null : 'later-page' } })
+  })
+  await page.goto('/products')
+  await signIn(page)
+  await page.getByLabel('Search', { exact: true }).fill('drill')
+  await expect(page).toHaveURL(/q=drill/)
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
+  await page.getByRole('link', { name: 'PAGE2', exact: true }).click()
+  const trail = page.getByRole('navigation', { name: 'Breadcrumb' })
+  await expect(trail.getByText('Product details')).toBeVisible()
+  await expect(trail.getByRole('link', { name: 'Products' })).toHaveAttribute('href', '/products')
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.getByLabel('Search', { exact: true })).toHaveValue('drill')
+  await expect(page.getByRole('link', { name: 'PAGE2', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeEnabled()
+  await page.getByRole('button', { name: 'Previous', exact: true }).click()
+  await expect(page.getByRole('link', { name: 'PAGE1', exact: true })).toBeVisible()
+})
+
+test('a direct product detail uses its parent fallback; Back from Stock returns to Stock', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/products/9', route => route.fulfill({ json: { id: '9', sku: 'HAMMER-001', name: 'Hammer', attributes: {}, active: true, stock: [], suppliers: [] } }))
+  await page.goto('/products/9')
+  await signIn(page)
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page).toHaveURL(/\/products$/)
+  await page.getByRole('link', { name: 'Stock', exact: true }).click()
+  await page.getByRole('link', { name: /HAMMER-001/ }).click()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page).toHaveURL(/\/stock$/)
+  await page.getByRole('link', { name: 'Overview', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0)
+})
+
+test('bulk notification read reports errors, retries and refreshes list, badge and dashboard', async ({ page }) => {
+  await mockSession(page)
+  let count = 30, attempts = 0
+  await page.route('**/api/notifications/unread-count', route => route.fulfill({ json: { count } }))
+  await page.route('**/api/dashboard', route => route.fulfill({ json: { stock: { stockRows: '1', outOfStock: '0', lowStock: '0' }, unreadNotifications: String(count) } }))
+  await page.route('**/api/notifications?**', route => route.fulfill({ json: { items: [{ id: '1', eventClass: 'LOW_STOCK', title: 'Low stock', body: '15.000000 available in MAIN.', targetPath: '/stock', createdAt: '2026-10-02T00:00:00Z', readAt: count ? null : '2026-10-02T01:00:00Z' }], nextCursor: null } }))
+  await page.route('**/api/notifications/read-all', route => {
+    attempts++
+    if (attempts === 1) return route.fulfill({ status: 503, json: { error: { message: 'Try again.' } } })
+    count = 0
+    return route.fulfill({ status: 204 })
+  })
+  await page.goto('/notifications')
+  await signIn(page)
+  await expect(page.getByText('15 available in MAIN.')).toBeVisible()
+  await page.getByRole('button', { name: 'Mark all as read', exact: true }).click()
+  await expect(page.getByRole('alert')).toHaveText('Try again.')
+  await page.getByRole('button', { name: 'Mark all as read', exact: true }).click()
+  await expect(page.getByRole('status')).toHaveText('All notifications marked as read.')
+  await expect(page.getByRole('button', { name: 'Mark all as read', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Mark read', exact: true })).toHaveCount(0)
+  await expect(page.locator('.notification-link strong')).toHaveCount(0)
+  await page.getByRole('link', { name: 'Overview', exact: true }).click()
+  await expect(page.locator('.metric').filter({ hasText: 'Unread alerts' }).locator('strong')).toHaveText('0')
+  expect(attempts).toBe(2)
+})
+
+test('logo, icon sign-out and navigation remain usable on mobile in both languages', async ({ page }) => {
+  await mockSession(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await expect(page.locator('.auth-brand img')).toHaveAttribute('src', '/logo.png')
+  await signIn(page)
+  await expect(page.locator('.topbar').getByRole('button', { name: 'Sign out', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Toggle menu' }).click()
+  const logout = page.locator('.sidebar-footer').getByRole('button', { name: 'Sign out', exact: true })
+  await expect(logout).toBeInViewport()
+  await expect(logout).toHaveText('')
+  await expect(page.locator('.sidebar img')).toBeVisible()
+  await page.getByRole('link', { name: 'Stock', exact: true }).click()
+  await page.getByLabel('Language').selectOption('vi')
+  await expect(page.getByRole('button', { name: 'Quay lại', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Toggle menu' }).click()
+  await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Chào mừng trở lại' })).toBeVisible()
+})
+
+test('unsaved supplier changes protect Back and sign-out; cancellation keeps input', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/products/9', route => route.fulfill({ json: { id: '9', sku: 'HAMMER-001', name: 'Hammer', attributes: {}, active: true, stock: [], suppliers: [] } }))
+  await page.goto('/products/9')
+  await signIn(page)
+  await page.getByLabel('Supplier SKU', { exact: true }).fill('unsaved-qa')
+  let prompts = 0
+  const cancel = async (dialog: import('@playwright/test').Dialog) => { prompts++; await dialog.dismiss() }
+  page.on('dialog', cancel)
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.getByLabel('Supplier SKU', { exact: true })).toHaveValue('unsaved-qa')
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(page.getByLabel('Supplier SKU', { exact: true })).toHaveValue('unsaved-qa')
+  expect(prompts).toBe(2)
+  page.off('dialog', cancel)
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible()
+})
+
+test('Back restores scroll after returning to a long Stock list', async ({ page }) => {
+  await mockSession(page)
+  await page.setViewportSize({ width: 1280, height: 500 })
+  await page.route('**/api/stock**', route => route.fulfill({ json: { items: Array.from({ length: 25 }, (_, i) => ({ warehouseId: '1', warehouse: 'MAIN', productId: '9', sku: `ROW-${i}`, name: 'Hammer', onHand: '9.000000', reserved: '0.000000', available: '9.000000' })), nextCursor: null } }))
+  await page.route('**/api/products/9', route => route.fulfill({ json: { id: '9', name: 'Hammer', attributes: {}, active: true, stock: [], suppliers: [] } }))
+  await page.goto('/stock')
+  await signIn(page)
+  const link = page.getByRole('link', { name: 'ROW-20 · Hammer', exact: true })
+  await link.scrollIntoViewIfNeeded()
+  const scroll = await page.evaluate(() => window.scrollY)
+  expect(scroll).toBeGreaterThan(500)
+  await link.click()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Stock', exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scroll)
+})
+
+test('document status filter and pagination return with their original history entry', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/orders**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/orders/12') return route.fulfill({ json: { id: '12', orderNumber: 'ORDER-SECOND', status: 'FULFILLED', revision: '1', items: [] } })
+    return route.fulfill({ json: { items: [{ id: '12', orderNumber: url.searchParams.has('cursor') ? 'ORDER-SECOND' : 'ORDER-FIRST', status: url.searchParams.get('status') || 'DRAFT', createdAt: '2026-10-02T00:00:00Z' }], nextCursor: url.searchParams.has('cursor') ? null : '12' } })
+  })
+  await page.goto('/orders')
+  await signIn(page)
+  await page.getByRole('combobox', { name: 'Status', exact: true }).selectOption('FULFILLED')
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
+  await page.getByRole('link', { name: 'ORDER-SECOND', exact: true }).click()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: 'Status', exact: true })).toHaveValue('FULFILLED')
+  await expect(page.getByRole('link', { name: 'ORDER-SECOND', exact: true })).toBeVisible()
+})
+
+for (const [path, label] of [['/', 'Overview'], ['/products', 'Products'], ['/stock', 'Stock'], ['/receipts', 'Receipts'], ['/orders', 'Orders'], ['/returns', 'Returns'], ['/transfers', 'Transfers'], ['/stock-requests', 'Approvals'], ['/movements', 'Movements'], ['/reports', 'Reports'], ['/jobs', 'Imports & exports'], ['/references', 'Reference data'], ['/users', 'Users'], ['/notifications', 'Notifications'], ['/unknown-page', 'Page not found']]) {
+  test(`navigation trail names ${path} correctly`, async ({ page }) => {
+    await mockSession(page)
+    // Reports has a different response shape from ordinary lists.
+    await page.route('**/api/reports/valuation', route => route.fulfill({ json: { currencyTotals: [], unvaluedStockRows: '0' } }))
+    await page.goto(path)
+    await signIn(page)
+    await expect(page.locator('.breadcrumbs [aria-current="page"]')).toHaveText(label)
+    if (path !== '/') {
+      await expect(page.getByRole('button', { name: 'Back', exact: true })).toHaveText('←')
+      await page.getByRole('button', { name: 'Back', exact: true }).click()
+      await expect(page).toHaveURL(/\/$/)
+    }
+  })
+}
+
+test('job selection and browser Back keep independent pagers and uploaded unsaved files', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/imports**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith('/preview')) return route.fulfill({ json: { columns: ['sku', 'quantity', 'unit_price'], rows: [{ rowNumber: 2, values: ['000123', '2.125000', '25.0000'] }, { rowNumber: 3, values: ['000124', '9.000000', '25.0000'] }], hasMore: false, errors: [{ rowNumber: 3, field: 'unit_price', message: 'Invalid price fixture' }] } })
+    if (/\/imports\/\d+$/.test(url.pathname)) return route.fulfill({ json: { id: '32', kind: 'ORDERS', status: 'INVALID', jobStatus: 'DONE', errors: [], validatedRows: 2 } })
+    return route.fulfill({ json: { items: [{ id: url.searchParams.has('cursor') ? '32' : '31', kind: 'ORDERS', status: 'INVALID' }], nextCursor: url.searchParams.has('cursor') ? null : '31' } })
+  })
+  await page.route('**/api/exports**', route => {
+    const url = new URL(route.request().url())
+    if (/\/exports\/\d+$/.test(url.pathname)) return route.fulfill({ json: { id: '42', kind: 'PRODUCTS', ready: true, status: 'DONE' } })
+    return route.fulfill({ json: { items: [{ id: url.searchParams.has('cursor') ? '42' : '41', kind: 'PRODUCTS', ready: true, status: 'DONE' }], nextCursor: url.searchParams.has('cursor') ? null : '41' } })
+  })
+  await page.goto('/jobs'); await signIn(page)
+  const imports = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'New import', exact: true }) })
+  const exports = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'New export', exact: true }) })
+  await imports.getByRole('button', { name: 'Next', exact: true }).click()
+  await exports.getByRole('button', { name: 'Next', exact: true }).click()
+  await page.getByLabel('CSV file').setInputFiles({ name: 'unsaved.csv', mimeType: 'text/csv', buffer: Buffer.from('sku,quantity\n000123,2.125000\n') })
+  await imports.getByRole('button', { name: '#32', exact: true }).click()
+  await expect(page.locator('.breadcrumbs [aria-current]')).toHaveText('Import review')
+  const preview = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Import review', exact: true }) })
+  await expect(preview.getByRole('cell', { name: '000123', exact: true })).toBeVisible()
+  await expect(preview.getByRole('cell', { name: '2.125', exact: true })).toBeVisible()
+  await expect(preview.getByRole('cell', { name: '25.0000', exact: true })).toBeVisible()
+  await expect(preview.getByRole('cell', { name: '25', exact: true })).toBeVisible()
+  await exports.getByRole('button', { name: '#42', exact: true }).click()
+  await expect(page.locator('.breadcrumbs [aria-current]')).toHaveText('Export download')
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.locator('.breadcrumbs [aria-current]')).toHaveText('Import review')
+  await expect(imports.getByRole('button', { name: '#32', exact: true })).toBeVisible()
+  await expect(exports.getByRole('button', { name: '#42', exact: true })).toBeVisible()
+  expect(await page.getByLabel('CSV file').evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe('unsaved.csv')
+  expect(await page.getByLabel('CSV file').evaluate((input: HTMLInputElement) => input.files?.[0]?.text())).toBe('sku,quantity\n000123,2.125000\n')
+  const dismissed = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.dismiss(); resolve() }))
+  await page.getByRole('link', { name: 'Stock', exact: true }).click()
+  await dismissed
+  await expect(page).toHaveURL(/\/jobs\?import=32$/)
+  const accepted = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.accept(); resolve() }))
+  await page.getByRole('link', { name: 'Stock', exact: true }).click()
+  await accepted
+  await expect(page).toHaveURL(/\/stock$/)
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page)
+  await page.getByRole('link', { name: 'Imports & exports', exact: true }).click()
+  await expect(imports.getByRole('button', { name: '#31', exact: true })).toBeVisible()
+  await expect(exports.getByRole('button', { name: '#41', exact: true })).toBeVisible()
+  await expect(imports.getByRole('button', { name: 'Previous', exact: true })).toBeDisabled()
+})
+
+for (const kind of ['import', 'export'] as const) {
+  test(`direct ${kind} alias opens the selected job and returns to its parent`, async ({ page }) => {
+    await mockSession(page)
+    await page.route(`**/api/${kind}s/17`, route => route.fulfill({ json: kind === 'import'
+      ? { id: '17', kind: 'PRODUCTS', status: 'COMMITTED', jobStatus: 'DONE', errors: [], validatedRows: 1 }
+      : { id: '17', kind: 'PRODUCTS', status: 'DONE', ready: true } }))
+    await page.route('**/api/imports/17/preview', route => route.fulfill({ json: { columns: ['sku'], rows: [], errors: [], hasMore: false } }))
+    await page.goto(`/${kind}s/17`); await signIn(page)
+    await expect(page).toHaveURL(new RegExp(`/jobs\\?${kind}=17$`))
+    await expect(page.locator('.breadcrumbs [aria-current]')).toHaveText(kind === 'import' ? 'Import review' : 'Export download')
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page).toHaveURL(/\/jobs$/)
+  })
+}
+
+test('attribute and threshold forms protect changes when switching reference sections', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/categories', route => route.fulfill({ json: { items: [{ id: '1', name: 'Tools' }, { id: '2', name: 'Clothes' }] } }))
+  await page.route('**/api/categories/2/attributes', route => route.fulfill({ json: { items: [] } }))
+  await page.goto('/references'); await signIn(page)
+  await page.getByRole('button', { name: 'Tools', exact: true }).click()
+  await page.getByLabel('Key', { exact: true }).fill('unsaved_attribute')
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: 'Clothes', exact: true }).click()
+  await expect(page.getByLabel('Key', { exact: true })).toHaveValue('unsaved_attribute')
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Clothes', exact: true }).click()
+  await expect(page.getByLabel('Key', { exact: true })).toHaveValue('')
+  await page.getByRole('button', { name: 'Warehouses', exact: true }).click()
+  await page.getByLabel('Low-stock threshold', { exact: true }).fill('2.125')
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: 'Categories', exact: true }).click()
+  await expect(page.getByLabel('Low-stock threshold', { exact: true })).toHaveValue('2.125')
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Categories', exact: true }).click()
+  await page.getByRole('link', { name: 'Stock', exact: true }).click()
+  await expect(page).toHaveURL(/\/stock$/)
+})
+
+for (const [kind, status] of [['receipts', 'POSTED'], ['orders', 'FULFILLED'], ['returns', 'POSTED'], ['transfers', 'PARTIALLY_RECEIVED']]) {
+  test(`decimal presentation covers ${kind} lines and transfer balances`, async ({ page }) => {
+    await mockSession(page)
+    await page.route(`**/api/${kind}/12`, route => route.fulfill({ json: { id: '12', status, revision: 1, items: [{ id: '101', sku: '000123', productId: '9', quantity: '2.125000', unitCost: '25.0000', unitPrice: '25.0000', requestedQty: '9.000000', receivedQty: '7.000000', sentQty: '9.000000', inTransitQty: '2.000000', quarantinedQty: '0.000000' }] } }))
+    await page.goto(`/${kind}/12`); await signIn(page)
+    const items = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Items', exact: true }) })
+    await expect(items.getByRole('cell', { name: '000123', exact: true })).toBeVisible()
+    for (const value of kind === 'transfers' ? ['9', '7', '2', '0'] : ['2.125', '25']) await expect(items.getByRole('cell', { name: value, exact: true })).toBeVisible()
+    await expect(page.locator('.breadcrumbs [aria-current]')).toHaveText(kind === 'receipts' ? 'Receipt details' : kind === 'orders' ? 'Order details' : kind === 'returns' ? 'Return details' : 'Transfer details')
+    await page.getByRole('button', { name: 'Back', exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/${kind}$`))
+  })
+}
+
+test('decimal prices, edit inputs and arbitrary product text keep their intended precision', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/products/9', route => route.fulfill({ json: { id: '9', sku: '000123', barcode: '000456', name: 'Text 9.000000', description: 'Original free text 2.125000', categoryId: '1', unitId: '1', unit: 'EA', attributes: { material: 'Text 9.000000' }, sellingPrice: '9999999999999999.123400', sellingCurrency: 'USD', active: true, revision: '1', stock: [{ warehouse: 'MAIN', onHand: '2.125000', reserved: '0.000000', available: '2.125000' }], suppliers: [{ id: '2', name: 'Acme', primarySupplier: true, cost: '10.0000', currency: 'USD' }] } }))
+  await page.goto('/products/9'); await signIn(page)
+  await expect(page.getByText('9999999999999999.1234 USD', { exact: true })).toBeVisible()
+  await expect(page.getByText('Original free text 2.125000', { exact: true })).toBeVisible()
+  await expect(page.getByText('000456', { exact: true })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Supplier', exact: true }).selectOption('2')
+  await expect(page.getByLabel('Cost', { exact: true })).toHaveValue('10')
+  await page.getByLabel('Supplier SKU', { exact: true }).fill('unsaved supplier')
+  const cancelled = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.dismiss(); resolve() }))
+  await page.getByRole('button', { name: 'Edit product', exact: true }).click(); await cancelled
+  await expect(page.getByLabel('Supplier SKU', { exact: true })).toHaveValue('unsaved supplier')
+  await expect(page.getByLabel('Selling price', { exact: true })).toHaveCount(0)
+  // Discard the supplier form before replacing it with product editing.
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button', { name: 'Edit product', exact: true }).click()
+  await expect(page.getByLabel('Selling price', { exact: true })).toHaveValue('9999999999999999.1234')
+  await page.getByLabel('Selling price', { exact: true }).fill('2.')
+  await expect(page.getByLabel('Selling price', { exact: true })).toHaveValue('2.')
+})
+
+test('reports, dashboard, approvals and movements trim quantities while retaining IDs', async ({ page }) => {
+  await mockSession(page)
+  await page.route('**/api/dashboard', route => route.fulfill({ json: { stock: { stockRows: '1', outOfStock: '0', lowStock: '0' }, unreadNotifications: '0', valuation: { currencyTotals: [{ currency: 'USD', amount: '170.0000000000' }], unvaluedStockRows: '2' } } }))
+  await page.route('**/api/reports/valuation**', route => route.fulfill({ json: { currencyTotals: [{ currency: 'USD', amount: '170.0000000000', stockRows: '1' }], unvaluedStockRows: '2' } }))
+  await page.route('**/api/reports/low-stock**', route => route.fulfill({ json: { items: [{ productId: '9', sku: '000123', warehouse: 'MAIN', available: '2.125000', threshold: '5.000000', criticalThreshold: null }], nextCursor: null } }))
+  await page.route('**/api/reports/movements**', route => route.fulfill({ json: { items: [{ day: '2026-10-02', eventType: 'ADJUSTMENT', movements: 1, onHandDelta: '-2.125000', reservedDelta: '0.000000' }] } }))
+  await page.route('**/api/movements**', route => route.fulfill({ json: { items: [{ id: '1', productId: '9', warehouseId: '001', eventType: 'ADJUSTMENT', onHandDelta: '-2.125000', reservedDelta: '0.000000', occurredAt: '2026-10-02T00:00:00Z' }], nextCursor: null } }))
+  await page.route('**/api/stock-requests/12', route => route.fulfill({ json: { id: '12', requestType: 'DAMAGE', decision: 'APPROVED', warehouseId: '001', productId: '9', requestedDelta: '-2.125000', observedOnHand: '9.000000', approvedDelta: '-2.125000', reason: 'Text 9.000000' } }))
+  await page.goto('/'); await signIn(page)
+  await expect(page.getByText('170', { exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Reports', exact: true }).click()
+  for (const value of ['2.125', '5', '170']) await expect(page.getByRole('cell', { name: value, exact: true })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Warehouse', exact: true }).first().selectOption('1')
+  await page.getByLabel('From', { exact: true }).fill('2026-10-01')
+  await page.getByLabel('To (exclusive)', { exact: true }).fill('2026-10-03')
+  await page.getByRole('button', { name: 'Run report', exact: true }).click()
+  await expect(page.getByRole('cell', { name: '-2.125', exact: true })).toBeVisible()
+  await page.getByRole('link', { name: 'Movements', exact: true }).click()
+  for (const value of ['-2.125', '0', '001']) await expect(page.getByRole('cell', { name: value, exact: true })).toBeVisible()
+  await page.goto('/stock-requests/12')
+  await expect(page.getByText('-2.125', { exact: true })).toBeVisible()
+  await expect(page.getByText('Text 9.000000', { exact: true })).toBeVisible()
+  await expect(page.locator('.summary-row').filter({ hasText: 'Observed on hand' }).locator('strong')).toHaveText('9')
+})
+
+test('reference tabs guard discarded input and account forms retain independently dirty changes', async ({ page }) => {
+  await mockSession(page)
+  const user = { id: '2', displayName: 'Demo Staff', email: 'demo@example.invalid', role: 'STAFF', active: true }
+  await page.route('**/api/users?**', route => route.fulfill({ json: { items: [user], nextCursor: null } }))
+  await page.route('**/api/users/2', route => route.request().method() === 'PATCH' ? route.fulfill({ status: 204 }) : route.fulfill({ json: { ...user, warehouseIds: ['1'] } }))
+  await page.goto('/references'); await signIn(page)
+  await page.getByLabel('Name', { exact: true }).fill('Unsaved category')
+  const cancelledTab = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.dismiss(); resolve() }))
+  await page.getByRole('button', { name: 'Units', exact: true }).click(); await cancelledTab
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Unsaved category')
+  const acceptedTab = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.accept(); resolve() }))
+  await page.getByRole('button', { name: 'Units', exact: true }).click(); await acceptedTab
+  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('')
+  await page.getByRole('link', { name: 'Users', exact: true }).click()
+  await page.getByRole('button', { name: 'Demo Staff', exact: true }).click()
+  await expect(page.getByRole('checkbox', { name: 'MAIN — Main' })).toBeChecked()
+  await page.getByLabel('Display name', { exact: true }).fill('Saved profile')
+  await page.getByLabel('Temporary password', { exact: true }).fill('Unsaved-local-only')
+  await page.getByRole('button', { name: 'Save user', exact: true }).click()
+  await expect(page.getByRole('status')).toHaveText('User updated.')
+  const cancelledClose = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.dismiss(); resolve() }))
+  await page.getByRole('button', { name: 'Close', exact: true }).click(); await cancelledClose
+  await expect(page.getByLabel('Temporary password', { exact: true })).toHaveValue('Unsaved-local-only')
+  const acceptedClose = new Promise<void>(resolve => page.once('dialog', async dialog => { await dialog.accept(); resolve() }))
+  await page.getByRole('button', { name: 'Close', exact: true }).click(); await acceptedClose
+  await expect(page.getByLabel('Initial password', { exact: true })).toHaveValue('')
+  await page.getByRole('link', { name: 'Stock', exact: true }).click()
+  await expect(page).toHaveURL(/\/stock$/)
+})
+
+test('layout review captures logo, long account footer and breadcrumbs at four widths in both languages', async ({ page }, info) => {
+  test.setTimeout(60_000)
+  await mockSession(page, 'MANAGER', 'Demo Staff / Nhân viên miền Bắc rất dài')
+  await page.route('**/api/products/9', route => route.fulfill({ json: { id: '9', sku: 'DEMO-V2-P001', name: 'Smartphone / Điện thoại thông minh', categoryId: '1', unitId: '1', category: 'Electronics / Điện tử', unit: 'EA', attributes: { material: 'Demo / Mẫu' }, sellingPrice: '25.0000', sellingCurrency: 'USD', active: true, stock: [{ warehouse: 'MAIN', onHand: '9.000000', reserved: '0.000000', available: '9.000000' }], suppliers: [] } }))
+  const directory = process.env.QA_SCREENSHOT_DIR || info.outputPath('visuals')
+  await mkdir(directory, { recursive: true })
+  await page.goto('/products/9')
+  for (const width of [1440, 768, 390, 320]) for (const language of ['en', 'vi']) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.getByLabel('Language').selectOption(language)
+    const logo = page.locator('.auth-brand img')
+    await expect(logo).toBeVisible()
+    expect(await logo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(258)
+    await page.screenshot({ path: join(directory, `signin-${width}-${language}.png`), fullPage: true })
+  }
+  await page.getByLabel('Language').selectOption('en'); await signIn(page)
+  for (const width of [1440, 768, 390, 320]) for (const language of ['en', 'vi']) {
+    await page.setViewportSize({ width, height: 900 }); await page.getByLabel('Language').selectOption(language)
+    await expect(page.getByRole('heading', { name: 'Smartphone / Điện thoại thông minh', exact: true })).toBeVisible()
+    await page.screenshot({ path: join(directory, `product-${width}-${language}.png`), fullPage: true })
+    if (width < 740) {
+      await page.getByRole('button', { name: 'Toggle menu' }).click()
+      await expect(page.locator('.sidebar')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)')
+    } else await expect(page.getByRole('button', { name: language === 'en' ? 'Close menu' : 'Đóng trình đơn', exact: true })).toBeHidden()
+    const signout = page.locator('.sidebar-footer button')
+    await expect(signout).toBeInViewport()
+    const bounds = await signout.boundingBox(), svg = await signout.locator('svg').boundingBox()
+    expect(bounds!.width).toBeGreaterThanOrEqual(44); expect(bounds!.height).toBeGreaterThanOrEqual(44)
+    expect(svg!.width).toBe(22)
+    await page.screenshot({ path: join(directory, `sidebar-${width}-${language}.png`), fullPage: true })
+    if (width < 740) {
+      await page.getByRole('button', { name: language === 'en' ? 'Close menu' : 'Đóng trình đơn', exact: true }).click()
+      await expect(page.locator('.sidebar')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, -232, 0)')
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
+})
+
+async function mockSession(page: Page, role: 'MANAGER' | 'VIEWER' = 'MANAGER', displayName = 'Warehouse Manager') {
   await page.addInitScript(() => { Object.defineProperty(window, 'EventSource', { value: undefined }) })
   let signedIn = false
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
     const method = route.request().method()
     const send = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
-    if (path === '/api/auth/me') return signedIn ? send({ user: { id: '1', email: 'manager@example.com', displayName: 'Warehouse Manager', role, warehouses: ['1'], mustChangePassword: false } }) : send({ error: { code: 'UNAUTHENTICATED', message: 'Sign in first.' } }, 401)
-    if (path === '/api/auth/login') { signedIn = true; return send({ user: { id: '1', email: 'manager@example.com', displayName: 'Warehouse Manager', role, warehouses: ['1'], mustChangePassword: false } }) }
+    if (path === '/api/auth/me') return signedIn ? send({ user: { id: '1', email: 'manager@example.com', displayName, role, warehouses: ['1'], mustChangePassword: false } }) : send({ error: { code: 'UNAUTHENTICATED', message: 'Sign in first.' } }, 401)
+    if (path === '/api/auth/login') { signedIn = true; return send({ user: { id: '1', email: 'manager@example.com', displayName, role, warehouses: ['1'], mustChangePassword: false } }) }
     if (path === '/api/auth/logout') { signedIn = false; return route.fulfill({ status: 204 }) }
     if (path === '/api/notifications/unread-count') return send({ count: 0 })
     if (path === '/api/dashboard') return send({ generatedAt: new Date().toISOString(), role, stock: { stockRows: '1', outOfStock: '0', lowStock: '0' }, unreadNotifications: '0' })
@@ -38,7 +418,7 @@ test('manager signs in, searches products, and opens stock', async ({ page }) =>
   await page.getByLabel('Search').fill('HAMMER')
   await expect(page.getByRole('link', { name: 'HAMMER-001' })).toBeVisible()
   await page.getByRole('link', { name: 'Stock', exact: true }).click()
-  await expect(page.getByText('8.000000')).toBeVisible()
+  await expect(page.getByText('8', { exact: true })).toBeVisible()
 })
 
 for (const count of ['0', '3']) {
@@ -83,7 +463,7 @@ test('sign-in, navigation, search and sign-out work using only the keyboard', as
   await expect(page.getByRole('link', { name: 'HAMMER-001' })).toBeVisible()
   await tabTo(page.getByRole('link', { name: 'Stock', exact: true }))
   await page.keyboard.press('Enter')
-  await expect(page.getByText('8.000000')).toBeVisible()
+  await expect(page.getByText('8', { exact: true })).toBeVisible()
   await tabTo(page.getByRole('button', { name: 'Sign out', exact: true }))
   await page.keyboard.press('Enter')
   await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible()
@@ -178,7 +558,7 @@ test('viewer sees stock without manager controls on a narrow screen', async ({ p
   await page.getByRole('button', { name: 'Toggle menu' }).click()
   await expect(page.getByRole('link', { name: 'Users' })).toHaveCount(0)
   await page.getByRole('link', { name: 'Stock', exact: true }).click()
-  await expect(page.getByText('8.000000')).toBeVisible()
+  await expect(page.getByText('8', { exact: true })).toBeVisible()
 })
 
 test('manager creates a receipt and selects a product by SKU before saving lines', async ({ page }) => {
@@ -516,6 +896,10 @@ test('evidence picker is named, rejects oversized files and submits a small file
   await expect(page.getByRole('alert')).toHaveText('Evidence must be 5 MB or smaller.')
   expect(uploadCount).toBe(0)
   await picker.setInputFiles({ name: 'qa-evidence.png', mimeType: 'image/png', buffer: png })
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page).toHaveURL(/\/stock-requests\/40$/)
+  expect(await picker.evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe('qa-evidence.png')
   await page.getByRole('button', { name: 'Upload evidence' }).click()
   await expect(page.getByRole('link', { name: 'qa-evidence.png' })).toHaveAttribute('href', '/api/evidence/60/file')
   await expect(page.getByRole('alert')).toHaveCount(0)
@@ -544,6 +928,9 @@ test('excess discrepancy defaults to a valid resolution and clears after resolvi
   await expect(discrepancy.getByRole('combobox', { name: 'Resolution' })).toHaveValue('ACCEPT_EXCESS')
   await discrepancy.getByLabel('Quantity').fill('1')
   await discrepancy.getByLabel('Reason').fill('Verified excess')
+  page.once('dialog', dialog => dialog.dismiss())
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(discrepancy.getByLabel('Reason')).toHaveValue('Verified excess')
   const pending = page.waitForRequest(request => request.url().endsWith('/api/discrepancies/51/resolve'))
   await discrepancy.getByRole('button', { name: 'Resolve', exact: true }).click()
   expect((await pending).postDataJSON()).toMatchObject({ resolutionType: 'ACCEPT_EXCESS', quantity: '1', reason: 'Verified excess' })

@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useViewState } from './view-state'
 import { useQuery } from '@tanstack/react-query'
 import { api, pathWithQuery, type Page } from './api'
 
 export function usePage<T>(path: string, filters: Record<string, string | undefined | null> = {}) {
   const filterKey = JSON.stringify(filters)
-  const [page, setPage] = useState<{ key: string; cursor: string | null; history: (string | null)[] }>({ key: filterKey, cursor: null, history: [] })
+  const [page, setPage] = useViewState<{ key: string; cursor: string | null; history: (string | null)[] }>(`pager:${path}`, { key: filterKey, cursor: null, history: [] })
   const active = page.key === filterKey ? page : { key: filterKey, cursor: null, history: [] }
   const query = useQuery({
     queryKey: ['page', path, filterKey, active.cursor],

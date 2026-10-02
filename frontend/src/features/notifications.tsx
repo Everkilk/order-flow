@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Card, DataTable, Loading, Notice, PageHeading, Pager } from '../components/ui'
@@ -6,8 +6,9 @@ import { api, json } from '../lib/api'
 import { usePage } from '../lib/queries'
 import { useSession } from '../app/session-context'
 import { t } from '../app/locale'
+import { notificationBody } from '../lib/numbers'
 
-type Notification = { id: string; title: string; body: string; targetPath: string; createdAt: string; readAt: string | null }
+type Notification = { id: string; eventClass?: string; title: string; body: string; targetPath: string; createdAt: string; readAt: string | null }
 
 function useLiveNotifications() {
   const { user } = useSession()
@@ -37,10 +38,22 @@ export function NotificationCount() {
 export function Notifications() {
   const query = usePage<Notification>('/notifications')
   const client = useQueryClient()
+  const unread = useQuery({ queryKey: ['unread-count'], queryFn: () => api<{ count: number }>('/notifications/unread-count') })
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>()
+  const [success, setSuccess] = useState('')
   async function markRead(id: string) {
-    await api<void>(`/notifications/${id}/read`, json('POST', {}))
-    await client.invalidateQueries({ queryKey: ['page', '/notifications'] })
-    await client.invalidateQueries({ queryKey: ['unread-count'] })
+    if (busy) return
+    setBusy(id); setError(undefined); setSuccess('')
+    try {
+      await api<void>(id === 'all' ? '/notifications/read-all' : `/notifications/${id}/read`, json('POST', {}))
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['page', '/notifications'] }),
+        client.invalidateQueries({ queryKey: ['unread-count'] }),
+        client.invalidateQueries({ queryKey: ['dashboard'] }),
+      ])
+      if (id === 'all') setSuccess('All notifications marked as read.')
+    } catch (e) { setError(e) } finally { setBusy(null) }
   }
-  return <><PageHeading title="Notifications" description="Recent updates and tasks assigned to you." /><Card>{query.isPending ? <Loading /> : query.error ? <Notice error={query.error} /> : <DataTable headers={['Update', 'When', 'Status']} rows={query.data.items.map(row => [<div><strong>{row.title}</strong><p>{row.body}</p>{row.targetPath.startsWith('/') && !row.targetPath.startsWith('//') && <Link to={row.targetPath} onClick={() => { if (!row.readAt) void markRead(row.id) }}>{t('Open record →')}</Link>}</div>, new Date(row.createdAt).toLocaleString(), row.readAt ? t('Read') : <button className="button subtle" onClick={() => void markRead(row.id)}>{t('Mark read')}</button>])} />}<Pager next={query.next} previous={query.previous} onNext={query.forward} onPrevious={query.back} /></Card></>
+  return <><PageHeading title="Notifications" description="Recent updates and tasks assigned to you." action={<button className="button subtle" disabled={busy !== null || !unread.data?.count} onClick={() => void markRead('all')}>{t(busy === 'all' ? 'Marking as read…' : 'Mark all as read')}</button>} /><Notice error={error} success={success} /><Card>{query.isPending ? <Loading /> : query.error ? <Notice error={query.error} /> : <DataTable headers={['Update', 'When', 'Status']} rows={query.data.items.map(row => [<div><strong>{row.title}</strong><p>{notificationBody(row.eventClass, row.body)}</p>{row.targetPath.startsWith('/') && !row.targetPath.startsWith('//') && <Link to={row.targetPath} onClick={() => { if (!row.readAt) void markRead(row.id) }}>{t('Open record →')}</Link>}</div>, new Date(row.createdAt).toLocaleString(), row.readAt ? t('Read') : <button className="button subtle" disabled={busy !== null} onClick={() => void markRead(row.id)}>{t('Mark read')}</button>])} />}<Pager next={query.next} previous={query.previous} onNext={query.forward} onPrevious={query.back} /></Card></>
 }

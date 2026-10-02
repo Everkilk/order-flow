@@ -1,5 +1,6 @@
+import { useViewState } from '../lib/view-state'
 import { t } from '../app/locale'
-import { useState, type FormEvent } from 'react'
+import { type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSession } from '../app/session-context'
 import { Card, DataTable, Field, Loading, Notice, PageHeading, Pager } from '../components/ui'
@@ -13,10 +14,10 @@ type Valuation = { currencyTotals: { currency: string; amount: string; stockRows
 
 export function Reports() {
   const { user } = useSession()
-  const [warehouseId, setWarehouse] = useState('')
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const [range, setRange] = useState<{ warehouseId: string; from: string; to: string } | null>(null)
+  const [warehouseId, setWarehouse] = useViewState('warehouseId', '')
+  const [from, setFrom] = useViewState('from', '')
+  const [to, setTo] = useViewState('to', '')
+  const [range, setRange] = useViewState<{ warehouseId: string; from: string; to: string } | null>('range', null)
   const warehouses = useOptions<Warehouse>('/warehouses')
   const low = usePage<LowRow>('/reports/low-stock', { warehouseId })
   const valuation = useQuery({ queryKey: ['valuation', warehouseId], queryFn: () => api<Valuation>(pathWithQuery('/reports/valuation', { warehouseId })), enabled: user?.role === 'MANAGER' })
