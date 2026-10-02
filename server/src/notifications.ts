@@ -109,6 +109,14 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
       WHERE user_id=$1 AND read_at IS NULL`,[actor.id]);
     res.json({count:result.rows[0].count});
   });
+  router.post('/notifications/read-all',requireActor,async(req,res) => {
+    z.object({}).strict().parse(req.body);
+    const actor=res.locals.actor as Actor;
+    // One statement marks its snapshot; notifications arriving later remain unread.
+    await pool.query(`UPDATE orderflow.notifications SET read_at=clock_timestamp()
+      WHERE user_id=$1 AND read_at IS NULL`,[actor.id]);
+    res.status(204).end();
+  });
   router.post('/notifications/:id/read',requireActor,async(req,res) => {
     const notificationId=id.parse(req.params.id),actor=res.locals.actor as Actor;
     await pool.query(`UPDATE orderflow.notifications SET read_at=coalesce(read_at,clock_timestamp())

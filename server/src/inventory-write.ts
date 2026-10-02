@@ -3,6 +3,7 @@ import type pg from 'pg';
 import { Decimal } from 'decimal.js';
 import { AppError } from './errors.js';
 import { withTransaction } from './db.js';
+import { decimalText } from './decimal-text.js';
 
 type Source = { orderId?: string; receiptId?: string; returnId?: string; transferId?: string;
   transferReceiptId?: string; resolutionId?: string; decisionId?: string; reversalOfEventId?: string };
@@ -86,7 +87,7 @@ export async function postInventoryEvent(client: pg.PoolClient, event: {
     const available=state.hand.minus(state.reserved);
     if (!state.initialAvailable.gt(limit) || available.gt(limit)) continue;
     const title=`Low stock: ${threshold.rows[0].sku}`;
-    const body=`${quantity(available)} available in ${threshold.rows[0].code}.`;
+    const body=`${decimalText(quantity(available))} available in ${threshold.rows[0].code}.`;
     await client.query(`INSERT INTO orderflow.notifications
       (user_id,event_id,event_class,title,body,target_path,dedupe_key)
       SELECT u.id,$1,'LOW_STOCK',$2,$3,$4,$5 FROM orderflow.users u

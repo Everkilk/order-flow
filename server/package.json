@@ -7,7 +7,7 @@
     "node": ">=20.20.0"
   },
   "scripts": {
-    "test": "npm run typecheck && npm run db:test && npm run api:test && npm run build && npm run storage:test && npm run demo:test",
+    "test": "npm run typecheck && npm run db:test && npm run api:test && npm run build && npm run storage:test && npm run demo:test && npm run seed:test",
     "dev": "node --env-file=.env --import tsx --watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -21,6 +21,8 @@
     "benchmark:orders": "node --env-file=.env scripts/benchmark-orders.mjs",
     "api:test": "node node_modules/esbuild/bin/esbuild tests/api.test.ts --bundle --platform=node --format=esm --packages=external --external:../scripts/* --outfile=dist-tests/api.test.mjs && node --env-file=.env --test dist-tests/api.test.mjs",
     "demo:test": "node --env-file=.env --test tests/demo.test.mjs",
+    "seed:test": "node --env-file=.env --test tests/seed-demo.test.mjs",
+    "seed:demo": "node scripts/seed-demo.mjs",
     "storage:test": "node --test tests/storage.test.mjs",
     "setup:admin": "node --env-file=.env scripts/setup-admin.mjs",
     "db:create": "node --env-file=.env scripts/db.mjs create",

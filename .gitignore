@@ -151,3 +151,4 @@ server/data/
 server/.env.production
 !server/.env.production.example
 *.local
+server/.demo-state/

@@ -12,6 +12,7 @@ import { postInventoryEvent } from '../src/inventory-write.js';
 import { runOneJob } from '../src/job-worker.js';
 import { storagePath } from '../src/jobs.js';
 import { passwordHash } from '../src/auth.js';
+import { decimalText } from '../src/decimal-text.js';
 import type { Config } from '../src/config.js';
 import { readConfig } from '../src/config.js';
 import { localDatabaseUrl, quoteIdentifier, migrate } from '../scripts/db-lib.mjs';
@@ -530,6 +531,55 @@ test('crossing a stock threshold creates a readable notification', async () => {
   assert.ok(movements.data.items.length>0);
 });
 
+test('bulk read covers every page for only the current user and preserves prior timestamps', async () => {
+  const other=await request('/api/users','POST',{email:`read-${randomUUID()}@example.invalid`,displayName:'Read isolation',role:'VIEWER',password});
+  assert.equal(other.response.status,201);
+  const prefix=randomUUID();
+  await client.query(`INSERT INTO orderflow.notifications(user_id,event_class,title,body,dedupe_key)
+    SELECT $1,'TEST','Bulk read','Unread notification',$2||n FROM generate_series(1,30) n`,[example.manager,prefix]);
+  await client.query(`INSERT INTO orderflow.notifications(user_id,event_class,title,body,dedupe_key)
+    VALUES($1,'TEST','Other user','Keep unread',$2)`,[other.data.id,prefix]);
+  const old=(await client.query(`SELECT id,read_at FROM orderflow.notifications WHERE user_id=$1 AND read_at IS NOT NULL LIMIT 1`,[example.manager])).rows[0];
+  assert.ok(old);
+  assert.equal((await request('/api/notifications/read-all','POST',{},'')).response.status,401);
+  assert.equal((await request('/api/notifications/read-all','POST',{userId:other.data.id})).response.status,400);
+  assert.equal((await request('/api/notifications/read-all','POST',{})).response.status,204);
+  assert.equal((await request('/api/notifications/unread-count')).data.count,0);
+  assert.equal((await client.query('SELECT read_at FROM orderflow.notifications WHERE id=$1',[old.id])).rows[0].read_at.toISOString(),old.read_at.toISOString());
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.notifications WHERE user_id=$1 AND read_at IS NULL',[other.data.id])).rows[0].count,1);
+  const timestamp=(await client.query('SELECT read_at FROM orderflow.notifications WHERE user_id=$1 ORDER BY id DESC LIMIT 1',[example.manager])).rows[0].read_at.toISOString();
+  assert.equal((await request('/api/notifications/read-all','POST',{})).response.status,204);
+  assert.equal((await client.query('SELECT read_at FROM orderflow.notifications WHERE user_id=$1 ORDER BY id DESC LIMIT 1',[example.manager])).rows[0].read_at.toISOString(),timestamp);
+  await client.query(`INSERT INTO orderflow.notifications(user_id,event_class,title,body,dedupe_key)
+    VALUES($1,'TEST','Later arrival','Keep unread',$2)`,[example.manager,randomUUID()]);
+  assert.equal((await request('/api/notifications/unread-count')).data.count,1);
+});
+
+test('a notification committed after the bulk statement starts stays unread', async () => {
+  const inserted=await client.query(`INSERT INTO orderflow.notifications(user_id,event_class,title,body,dedupe_key)
+    VALUES($1,'TEST','Locked row','Bulk snapshot test',$2) RETURNING id`,[example.manager,randomUUID()]);
+  const lock=await pool.connect();
+  let pending;
+  try {
+    await lock.query('BEGIN');
+    await lock.query('SELECT id FROM orderflow.notifications WHERE id=$1 FOR UPDATE',[inserted.rows[0].id]);
+    pending=request('/api/notifications/read-all','POST',{});
+    let waiting=false;
+    for(let attempt=0;attempt<50;attempt++) {
+      const state=await client.query(`SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+        AND wait_event_type='Lock' AND query LIKE 'UPDATE orderflow.notifications SET read_at=clock_timestamp()%'`);
+      if(state.rowCount) {waiting=true;break;}
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert.ok(waiting,'The same bulk update must be blocked with its snapshot established.');
+    const later=await client.query(`INSERT INTO orderflow.notifications(user_id,event_class,title,body,dedupe_key)
+      VALUES($1,'TEST','Concurrent arrival','Keep unread',$2) RETURNING id`,[example.manager,randomUUID()]);
+    await lock.query('COMMIT');
+    assert.equal((await pending).response.status,204);
+    assert.equal((await client.query('SELECT read_at FROM orderflow.notifications WHERE id=$1',[later.rows[0].id])).rows[0].read_at,null);
+  } finally {await lock.query('ROLLBACK');lock.release();if(pending) await pending;}
+});
+
 test('notification stream announces a new stored notification', async () => {
   assert.equal((await request('/api/notifications/stream','GET',undefined,'')).response.status,401);
   const controller=new AbortController();
@@ -602,6 +652,24 @@ test('product CSV import validates before commit and export runs in the worker',
   const retried=await client.query('SELECT storage_key FROM orderflow.export_jobs WHERE id=$1',
     [queued.data.id]);
   assert.equal(retried.rows[0].storage_key,exportState.rows[0].storage_key);
+});
+
+test('new CSV exports trim only numeric columns and preserve large decimal and text values', async () => {
+  assert.equal(decimalText('9999999999999999.123400'),'9999999999999999.1234');
+  assert.equal(decimalText('-0.000000'),'0');
+  const sku='001000-'+randomUUID();
+  const product=await request('/api/products','POST',{sku,name:'=SUM(1+1)',categoryId:String(example.category),unitId:String(example.unit),
+    barcode:'000000012345',attributes:{screen_size_inches:6.5},sellingPrice:'9999999999999999.1234',sellingCurrency:'USD'});
+  assert.equal(product.response.status,201);
+  const exported=await request('/api/exports','POST',{kind:'PRODUCTS'});
+  assert.equal(exported.response.status,202);assert.equal(await runOneJob(pool,appConfig),true);
+  const response=await fetch(base+'/api/exports/'+exported.data.id+'/file',{headers:{Cookie:cookie}});
+  assert.equal(response.status,200);
+  const csv=await response.text(),row=csv.split('\n').find(line=>line.includes(sku));
+  assert.ok(row);assert.ok(row.includes("'=SUM(1+1)"));assert.ok(row.includes('000000012345'));assert.ok(row.includes('9999999999999999.1234'));
+  assert.ok(csv.startsWith('id,sku,name,category_id,unit_id,barcode,description,selling_price,selling_currency,attributes_json'));
+  const detail=await request('/api/products/'+product.data.id);
+  assert.equal(detail.data.sellingPrice,'9999999999999999.1234');assert.equal(detail.data.barcode,'000000012345');
 });
 
 test('opening-stock and staff order CSV imports validate and commit once', async () => {

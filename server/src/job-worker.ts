@@ -14,6 +14,7 @@ import { withLocalFile, prepareWrite, publishFile, removeStoredFile, storedFileE
 import { validateOperationalImport, commitOperationalImport } from './operational-imports.js';
 import { notifyUser } from './notifications.js';
 import { sha256File } from './file-integrity.js';
+import { decimalText } from './decimal-text.js';
 
 const id=z.string().regex(/^[1-9]\d*$/).refine(value=>
   value.length<=19 && BigInt(value)<=9223372036854775807n);
@@ -167,6 +168,7 @@ async function exportCsv(pool:pg.Pool,config:Config,jobId:string) {
     : job.kind==='MOVEMENTS' ? ['id','product_id','event_type','on_hand_delta','reserved_delta','created_at']
     : ['product_id','sku','name','available','threshold'];
   const formatter=stringify({header:true,columns});
+  const numericColumns=new Set(['selling_price','on_hand','reserved','available','on_hand_delta','reserved_delta','threshold']);
   const done=pipeline(formatter,createWriteStream(path,{flags:'wx'}));
   try {
     let cursor='0';
@@ -190,7 +192,7 @@ async function exportCsv(pool:pg.Pool,config:Config,jobId:string) {
               WHERE t.warehouse_id=$1 AND t.product_id>$2 AND b.available<=t.threshold
               ORDER BY t.product_id LIMIT 1000`,[warehouseId,cursor]);
       for (const row of result.rows) {
-        const cells=columns.map(column=>safeCell(row[column]));
+        const cells=columns.map(column=>safeCell(numericColumns.has(column) && typeof row[column]==='string' ? decimalText(row[column]) : row[column]));
         if (!formatter.write(cells)) await once(formatter,'drain');
       }
       if (result.rows.length<1000) break;
