@@ -8,6 +8,29 @@ async function signIn(page: Page) {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
 }
 
+for (const locale of ['en', 'vi']) {
+  test(`fulfilled-order selector explains loading and empty results in ${locale}`, async ({ page }) => {
+    await page.addInitScript(locale => localStorage.setItem('orderflow.locale', locale), locale)
+    await mockSession(page)
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    await page.route('**/api/orders?**', async route => {
+      await pending
+      await route.fulfill({ json: { items: [], nextCursor: null } })
+    })
+    await page.goto('/returns')
+    await page.getByLabel('Email', { exact: true }).fill('manager@example.com')
+    await page.getByLabel(locale === 'en' ? 'Password' : 'Mật khẩu', { exact: true }).fill('example-password')
+    await page.getByRole('button', { name: locale === 'en' ? 'Sign in' : 'Đăng nhập', exact: true }).click()
+    await page.getByRole('button', { name: locale === 'en' ? 'New return' : 'Tạo phiếu trả', exact: true }).click()
+    const drawer = page.getByRole('dialog')
+    await expect(drawer.getByRole('status')).toHaveText(locale === 'en' ? 'Searching…' : 'Đang tìm…')
+    release()
+    await expect(drawer.getByRole('status')).toHaveText(locale === 'en' ? 'No fulfilled orders match this search.' : 'Không có đơn hàng đã hoàn tất phù hợp với tìm kiếm này.')
+    await expect(drawer.getByLabel(locale === 'en' ? 'Fulfilled order' : 'Đơn hàng đã hoàn tất', { exact: true }).locator('option')).toHaveCount(1)
+  })
+}
+
 for (const width of [1440, 1024, 390, 320]) for (const locale of ['en','vi']) {
   test(`all document field grids align at ${width}px in ${locale}`, async({page})=>{
     test.setTimeout(60_000)

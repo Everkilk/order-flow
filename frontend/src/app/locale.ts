@@ -10,6 +10,7 @@ const vietnamese: Record<string, string> = {
   'All notifications marked as read.': 'Đã đánh dấu tất cả thông báo là đã đọc.',
   'Upload received.': 'Đã nhận tệp tải lên.',
   'The change was saved, but the page could not refresh. Reload to see the latest data.': 'Đã lưu thay đổi, nhưng không thể làm mới trang. Hãy tải lại để xem dữ liệu mới nhất.',
+  'No fulfilled orders match this search.': 'Không có đơn hàng đã hoàn tất phù hợp với tìm kiếm này.',
   'Export failed. Request a new export.': 'Xuất dữ liệu thất bại. Hãy yêu cầu xuất lại.',
   'Overview': 'Tổng quan', 'Products': 'Sản phẩm', 'Stock': 'Tồn kho',
   'Receipts': 'Phiếu nhập', 'Orders': 'Đơn hàng', 'Returns': 'Hàng trả',

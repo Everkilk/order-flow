@@ -1,0 +1,26 @@
+{
+  "at": "2026-10-04T20:33:25.424Z",
+  "origin": "https://order-flow-khaki-phi.vercel.app",
+  "frontendCommit": "531343efabb5a68a02e60021da82504aad9418ad",
+  "rootStatus": 200,
+  "assets": [
+    {
+      "path": "/assets/index-DItlZXUg.js",
+      "status": 200,
+      "sha256": "5a5bc5bc5b0864e8abd2be771b13a0e8d4c0f30c440be8978feb000f9800983b",
+      "matchesLocal": true
+    },
+    {
+      "path": "/assets/index-CMHKD6Rk.css",
+      "status": 200,
+      "sha256": "0c9dfc215dd7eddacc3968a329cf94e103eec67ef52098ef4667ffd3cd17f1c6",
+      "matchesLocal": true
+    },
+    {
+      "path": "/logo.png",
+      "status": 200,
+      "sha256": "8139e7cc0b579d9c13d0135817dc75d7efbbfd9e886653cae10e1ce0a8cb67c0",
+      "matchesLocal": true
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 Baseline source: `42757bb2736e2d2cff797aa4f6df0bcca5b548d3` on `main`. Agreed work and acceptance criteria: [plan](../bug-fix-plan-2026-10-04.md). Route/form/translation scope: [coverage inventory](coverage-inventory.md). Unrelated working changes present at the start are excluded from the scoped release.
 
-The additive backend implementation `fa64d18f785edd10e52cd68a7ea6b6c8747f9057` has been pushed by the user. The hosted database now has migration 011, and Render's readiness endpoint returns 200 with `{"status":"ready"}`. The user checked Render's existing dashboard tab and confirmed **Live at fa64d18**; browser control could not read that tab. Staff sign-in and the dashboard work with the previous compatible frontend, with no captured browser errors. The dependent frontend has passed local checks and awaits publication.
+The additive backend implementation `fa64d18f785edd10e52cd68a7ea6b6c8747f9057` has been pushed by the user. The hosted database now has migration 011, and Render's readiness endpoint returns 200 with `{"status":"ready"}`. The user checked Render's existing dashboard tab and confirmed **Live at fa64d18**; browser control could not read that tab. Frontend `531343efabb5a68a02e60021da82504aad9418ad` is published: GitHub reports Vercel success and its JS/CSS/logo match the tested build byte for byte (see `published-assets.json`). Bounded live verification is in progress.
 
 ## Requirement results
 
@@ -17,6 +17,8 @@ The additive backend implementation `fa64d18f785edd10e52cd68a7ea6b6c8747f9057` h
 | R7: account footer/sign out | Browser screenshots show long EN/VI names and the red 44 px icon beneath the name at four widths. Keyboard, dirty-form guard and failed sign-out retry tests pass. Real manager/staff/viewer sessions sign out. | Pending release. |
 
 ## Exact local checks
+
+Follow-up during live verification: the fulfilled-order selector correctly excluded confirmed Order ID 33, but lacked the loading/empty-search feedback specified in the plan. Added both messages in EN/VI with controlled loading and empty-response tests. The updated full browser suite passed **87/87**, build passed, and lint passed after the suite finished. An earlier simultaneous lint run failed because the browser runner removed its temporary results directory while ESLint scanned it; sequential lint exited 0. No source lint error was reported. Latest results are in `frontend-selector-results.txt`; publication of this small follow-up remains outstanding.
 
 - `frontend: npm run lint` — pass, exit 0 (`frontend-lint-final.log`).
 - `frontend: npm run build` — pass, exit 0 (`frontend-build-final.log`).
@@ -51,6 +53,8 @@ The hosted database was reached read-only over TLS and showed migrations 001–0
 Rollback: revert frontend to its prior production revision if its UI fails. Revert backend only to a revision compatible with pending cleanup jobs, or preserve those jobs for the fixed worker; leave additive schema/history intact. Do not reset the hosted database or recreate deleted files. Render Free Postgres has no managed backup, so obtain a protected, verifiable recovery artifact by an authorized method before migration. A physically removed evidence file cannot be restored from the deletion record alone.
 
 ## Hosted usage counter
+
+Read-only frontend checks on 5 October: the Orders table/detail identify ID 29 as fulfilled `DEMO-V2-ORD-25` and ID 33 as confirmed `DEMO-V2-ORD-29`. The fulfilled order's product link opens actual Product ID 24, Canvas fabric / Vải canvas, SKU `DEMO-V2-P020`. Its Create a return link preselects ID 29 and restricts the warehouse to original Main. Searching ID 33 offers no selectable order. No document was submitted. Browser control temporarily timed out during the dirty-modal close check, then recovered; the modal is closed, but native confirmation behavior is not yet proven on the hosted site.
 
 Business records: **0/10**. Tiny evidence uploads: **0/2**. Small CSV jobs: **0/2**. New hosting services/upgrades: **0**. Account-specific allowance was checked against the user-provided 4–5 October screenshots recorded above; recheck it if publication is delayed or usage changes. No hosted writes have occurred in this repair phase.
 
