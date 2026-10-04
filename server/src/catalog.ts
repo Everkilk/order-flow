@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { Decimal } from 'decimal.js';
 import { AppError } from './errors.js';
 import { requireActor, requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 
 const id = z.string().regex(/^[1-9]\d*$/);
 const amount = z.string().regex(/^\d+(?:\.\d{1,4})?$/).refine(s => new Decimal(s).isFinite());
@@ -59,7 +59,7 @@ export function catalogRoutes(pool: pg.Pool): Router {
   router.post('/categories', requireRole('MANAGER'), async (req, res) => {
     const input = categoryInput.parse(req.body);
     const actor = actorOf(res);
-    const row = await withTransaction(pool, async client => {
+    const row = await withMutation(pool,req,actor,async client => {
       const result = await client.query('INSERT INTO orderflow.categories(name) VALUES($1) RETURNING id::text,name,active', [input.name]);
       await client.query("INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id) VALUES($1,'CATEGORY_CREATE','category',$2)", [actor.id, result.rows[0].id]);
       return result.rows[0];
@@ -71,7 +71,7 @@ export function catalogRoutes(pool: pg.Pool): Router {
     const input=z.object({name:z.string().trim().min(1).max(160).optional(),active:z.boolean().optional()}).strict().parse(req.body);
     if (!Object.keys(input).length) throw new AppError(400,'VALIDATION_ERROR','Provide a field to change.');
     const actor=actorOf(res);
-    await withTransaction(pool,async c => {
+    await withMutation(pool,req,actor,async c => {
       const before=await c.query('SELECT name,active FROM orderflow.categories WHERE id=$1 FOR UPDATE',[categoryId]);
       if (!before.rowCount) throw new AppError(404,'NOT_FOUND','Category not found.');
       await c.query('UPDATE orderflow.categories SET name=$1,active=$2 WHERE id=$3',[input.name ?? before.rows[0].name,input.active ?? before.rows[0].active,categoryId]);
@@ -93,7 +93,7 @@ export function catalogRoutes(pool: pg.Pool): Router {
     if (input.minValue != null && input.maxValue != null && input.minValue > input.maxValue) throw new AppError(422, 'INVALID_ATTRIBUTE', 'Minimum exceeds maximum.');
     if (input.allowedValues?.some(v => typeof v !== input.dataType)) throw new AppError(422, 'INVALID_ATTRIBUTE', 'Allowed values must match the attribute type.');
     const actor = actorOf(res);
-    const row = await withTransaction(pool, async client => {
+    const row = await withMutation(pool,req,actor,async client => {
       const category = await client.query('SELECT id FROM orderflow.categories WHERE id=$1 FOR UPDATE', [categoryId]);
       if (!category.rowCount) throw new AppError(404, 'NOT_FOUND', 'Category not found.');
       const result = await client.query(`INSERT INTO orderflow.category_attributes(category_id,key,label,data_type,required,unit_label,min_value,max_value,allowed_values)
@@ -117,7 +117,7 @@ export function catalogRoutes(pool: pg.Pool): Router {
     const input = productInput.parse(req.body);
     if ((input.sellingPrice == null) !== (input.sellingCurrency == null)) throw new AppError(422, 'INVALID_PRICE', 'Price and currency must be supplied together.');
     const actor = actorOf(res);
-    const product = await withTransaction(pool, async client => {
+    const product = await withMutation(pool,req,actor,async client => {
       const category = await client.query('SELECT id FROM orderflow.categories WHERE id=$1 AND active FOR SHARE', [input.categoryId]);
       if (!category.rowCount) throw new AppError(422, 'INVALID_CATEGORY', 'Choose an active category.');
       const unit = await client.query('SELECT id FROM orderflow.units WHERE id=$1', [input.unitId]);
@@ -141,7 +141,7 @@ export function catalogRoutes(pool: pg.Pool): Router {
   router.put('/products/:id', requireRole('MANAGER'), async (req,res) => {
     const productId=id.parse(req.params.id), input=productUpdate.parse(req.body), actor=actorOf(res);
     if ((input.sellingPrice == null)!==(input.sellingCurrency == null)) throw new AppError(422,'INVALID_PRICE','Price and currency must be supplied together.');
-    const product=await withTransaction(pool,async c => {
+    const product=await withMutation(pool,req,actor,async c => {
       const category=await c.query('SELECT id FROM orderflow.categories WHERE id=$1 AND active FOR SHARE',[input.categoryId]);
       if (!category.rowCount) throw new AppError(422,'INVALID_CATEGORY','Choose an active category.');
       const before=await c.query('SELECT revision,description,image_url FROM orderflow.products WHERE id=$1 FOR UPDATE',[productId]);
@@ -168,7 +168,7 @@ export function catalogRoutes(pool: pg.Pool): Router {
     const productId=id.parse(req.params.id), supplierId=id.parse(req.params.supplierId),input=supplierLink.parse({ ...req.body,supplierId:req.params.supplierId });
     if ((input.cost == null)!==(input.currency == null)) throw new AppError(422,'INVALID_COST','Cost and currency must be supplied together.');
     const actor=actorOf(res);
-    await withTransaction(pool,async c => {
+    await withMutation(pool,req,actor,async c => {
       await c.query(`INSERT INTO orderflow.product_suppliers(product_id,supplier_id,supplier_sku,primary_supplier,cost,currency)
         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(product_id,supplier_id) DO UPDATE SET
         supplier_sku=excluded.supplier_sku,primary_supplier=excluded.primary_supplier,cost=excluded.cost,currency=excluded.currency`,

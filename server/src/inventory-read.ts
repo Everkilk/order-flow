@@ -107,8 +107,9 @@ export function inventoryReadRoutes(pool: pg.Pool): Router {
       page.occurred_at AS "occurredAt",page.order_id::text AS "orderId",
       page.receipt_id::text AS "receiptId",page.order_return_id::text AS "returnId",
       page.transfer_id::text AS "transferId",page.transfer_receipt_id::text AS "transferReceiptId",
-      page.resolution_id::text AS "resolutionId",page.decision_id::text AS "decisionId"
-      FROM page ORDER BY page.id DESC`,values);
+      page.resolution_id::text AS "resolutionId",page.decision_id::text AS "decisionId",p.sku,p.name,w.code AS warehouse
+      FROM page JOIN orderflow.products p ON p.id=page.product_id
+      JOIN orderflow.warehouses w ON w.id=page.warehouse_id ORDER BY page.id DESC`,values);
     const rows=result.rows.slice(0,input.limit);
     res.json({ items:rows,nextCursor:result.rows.length>input.limit ? rows.at(-1)?.id ?? null : null });
   });

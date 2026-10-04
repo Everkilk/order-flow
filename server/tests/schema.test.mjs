@@ -46,6 +46,32 @@ after(async () => {
   if(admin) await admin.end();
 });
 
+test('migration 011 upgrades populated data once during concurrent startup',async()=>{
+  const upgradeName=`orderflow_upgrade_test_${randomUUID().replaceAll('-','').slice(0,16)}`;
+  const upgradeUrl=new URL(url);upgradeUrl.pathname='/'+upgradeName;
+  await admin.query(`CREATE DATABASE ${quoteIdentifier(upgradeName)}`);
+  let first,second;
+  try {
+    first=await connect(upgradeUrl);second=await connect(upgradeUrl);
+    await migrate(first,()=>{},'010_stock_availability.sql');
+    const sample=await createExample(first,undefined,false);
+    const before=(await first.query('SELECT sku,name FROM orderflow.products WHERE id=$1',[sample.product])).rows[0];
+    await first.query('CREATE TABLE orderflow.evidence_removals (blocker integer)');
+    await assert.rejects(migrate(first,()=>{}),/011_submission_evidence\.sql/);
+    assert.equal((await first.query("SELECT count(*)::int AS count FROM public.orderflow_schema_migrations WHERE filename='011_submission_evidence.sql'")).rows[0].count,0);
+    assert.equal((await first.query("SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema='orderflow' AND table_name='mutation_results'")).rows[0].count,0);
+    await first.query('DROP TABLE orderflow.evidence_removals');
+    await Promise.all([migrate(first,()=>{}),migrate(second,()=>{})]);
+    const after=(await first.query('SELECT sku,name FROM orderflow.products WHERE id=$1',[sample.product])).rows[0];
+    assert.deepEqual(after,before);
+    assert.equal((await first.query("SELECT count(*)::int AS count FROM public.orderflow_schema_migrations WHERE filename='011_submission_evidence.sql'")).rows[0].count,1);
+    assert.equal((await first.query("SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema='orderflow' AND table_name IN ('mutation_results','evidence_removals')")).rows[0].count,2);
+  } finally {
+    await first?.end();await second?.end();
+    await admin.query(`DROP DATABASE ${quoteIdentifier(upgradeName)}`);
+  }
+});
+
 test('category values reject unknown keys, missing required values, wrong types and bounds',async()=>{
   for(const attrs of [{dpi:460,screen_size_inches:6.1},{color:'silver'},{screen_size_inches:'6.1'},{screen_size_inches:-1},{screen_size_inches:null}]) {
     await fail(()=>db.query(`INSERT INTO orderflow.products(sku,name,category_id,unit_id,attributes)

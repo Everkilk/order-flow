@@ -1,3 +1,4 @@
+import { cleanupUpload } from './upload-cleanup.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -8,9 +9,9 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
 import type { Config } from './config.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
-import { prepareWrite, publishFile, removeStoredFile, storedFileExists, openStoredStream } from './storage.js';
+import { prepareWrite, publishFile,  storedFileExists, openStoredStream } from './storage.js';
 
 const id=z.string().regex(/^[1-9]\d*$/);
 const maxBytes=5*1024*1024;
@@ -57,7 +58,7 @@ async function receiveEvidence(req:Request,path:string) {
     req.pipe(parser);
   });
 }
-async function checkTarget(db:Database,target:Target,targetId:string,actor:Actor) {
+async function checkTarget(db:Database,target:Target,targetId:string,actor:Actor,writing=false) {
   if(target==='discrepancy') {
     const found=await db.query(`SELECT t.source_warehouse_id::text AS source,
       t.destination_warehouse_id::text AS destination
@@ -70,11 +71,13 @@ async function checkTarget(db:Database,target:Target,targetId:string,actor:Actor
       throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
   } else {
     const found=await db.query(`SELECT warehouse_id::text AS "warehouseId",
-      requested_by::text AS "requestedBy" FROM orderflow.stock_change_requests WHERE id=$1`,[targetId]);
+      requested_by::text AS "requestedBy" FROM orderflow.stock_change_requests WHERE id=$1${writing?' FOR UPDATE':''}`,[targetId]);
     if(!found.rowCount) throw new AppError(404,'NOT_FOUND','Stock request not found.');
     if(actor.role!=='MANAGER' && (actor.id!==found.rows[0].requestedBy ||
         (found.rows[0].warehouseId && !warehouseAllowed(actor,found.rows[0].warehouseId))))
       throw new AppError(403,'FORBIDDEN','This request is not permitted.');
+    if(writing && (await db.query('SELECT 1 FROM orderflow.stock_change_decisions WHERE request_id=$1',[targetId])).rowCount)
+      throw new AppError(409,'EVIDENCE_LOCKED','Evidence cannot change after a decision.');
   }
 }
 
@@ -93,8 +96,22 @@ export function evidenceRoutes(pool:pg.Pool,config:Config):Router {
       const found=await pool.query(`SELECT f.id::text,f.filename,f.content_type AS "contentType",
         f.sha256,f.created_at AS "createdAt",f.uploaded_by::text AS "uploadedBy"
         FROM orderflow.${target.link} link JOIN orderflow.evidence_files f ON f.id=link.file_id
-        WHERE link.${target.column}=$1 ORDER BY f.id`,[targetId]);
-      res.json({items:found.rows});
+        WHERE link.${target.column}=$1 AND NOT EXISTS(SELECT 1 FROM orderflow.evidence_removals r WHERE r.file_id=f.id)
+        ORDER BY f.id`,[targetId]);
+      let canUpload=true,canDelete=false;
+      if(target.type==='stock-request') {
+        const state=await pool.query(`SELECT r.requested_by::text,EXISTS(SELECT 1 FROM orderflow.stock_change_decisions d WHERE d.request_id=r.id) AS decided
+          FROM orderflow.stock_change_requests r WHERE r.id=$1`,[targetId]);
+        canUpload=!state.rows[0].decided;canDelete=canUpload && state.rows[0].requested_by===actor.id;
+      }
+      const removed=target.type==='stock-request' ? await pool.query(`SELECT r.file_id::text AS id,
+        f.filename,r.removed_at AS "removedAt",u.display_name AS "removedBy",
+        j.status AS "cleanupStatus",j.last_error_code AS "cleanupError"
+        FROM orderflow.evidence_removals r JOIN orderflow.evidence_files f ON f.id=r.file_id
+        JOIN orderflow.users u ON u.id=r.removed_by
+        LEFT JOIN orderflow.background_jobs j ON j.dedupe_key='evidence-delete:'||r.file_id::text
+        WHERE r.request_id=$1 ORDER BY r.removed_at,r.file_id`,[targetId]) : {rows:[]};
+      res.json({items:found.rows,removed:removed.rows,canUpload,canDelete});
     });
     router.post(target.path,requireRole('STAFF','MANAGER'),async(req,res) => {
       const targetId=id.parse(req.params.id),actor=res.locals.actor as Actor;
@@ -102,10 +119,11 @@ export function evidenceRoutes(pool:pg.Pool,config:Config):Router {
       const key=`evidence/${randomUUID()}.bin`,path=await prepareWrite(config,key);
       let metadata:{filename:string;contentType:string;sha256:string};
       try {metadata=await receiveEvidence(req,path);await publishFile(config,key);}
-      catch(error) {await removeStoredFile(config,key).catch(()=>{});throw error;}
+      catch(error) {await cleanupUpload(pool,config,key,actor.id);throw error;}
       try {
-        const row=await withTransaction(pool,async c => {
-          await checkTarget(c,target.type,targetId,actor);
+        let created=false;
+        const row=await withMutation(pool,req,actor,async c => {
+          await checkTarget(c,target.type,targetId,actor,true);
           const inserted=await c.query(`INSERT INTO orderflow.evidence_files
             (uploaded_by,storage_key,filename,content_type,sha256) VALUES($1,$2,$3,$4,$5)
             RETURNING id::text,filename,content_type AS "contentType",sha256,
@@ -115,18 +133,39 @@ export function evidenceRoutes(pool:pg.Pool,config:Config):Router {
             VALUES($1,$2)`,[targetId,inserted.rows[0].id]);
           await c.query(`INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id)
             VALUES($1,'EVIDENCE_UPLOAD','evidence_file',$2)`,[actor.id,inserted.rows[0].id]);
-          return inserted.rows[0];
-        });
+          created=true;return inserted.rows[0];
+        },metadata);
+        if(!created) await cleanupUpload(pool,config,key,actor.id);
         res.status(201).json(row);
-      } catch(error) {await removeStoredFile(config,key).catch(()=>{});throw error;}
+      } catch(error) {await cleanupUpload(pool,config,key,actor.id);throw error;}
     });
   }
+  router.delete('/evidence/stock-requests/:id/:fileId',requireRole('STAFF','MANAGER'),async(req,res)=>{
+    const targetId=id.parse(req.params.id),fileId=id.parse(req.params.fileId),actor=res.locals.actor as Actor;
+    await withMutation(pool,req,actor,async c=>{
+      await checkTarget(c,'stock-request',targetId,actor,true);
+      const owner=await c.query('SELECT requested_by::text FROM orderflow.stock_change_requests WHERE id=$1',[targetId]);
+      if(owner.rows[0].requested_by!==actor.id) throw new AppError(403,'FORBIDDEN','Only the request creator can delete evidence.');
+      const file=await c.query(`SELECT f.storage_key,f.filename FROM orderflow.stock_request_evidence e
+        JOIN orderflow.evidence_files f ON f.id=e.file_id WHERE e.request_id=$1 AND e.file_id=$2`,[targetId,fileId]);
+      if(!file.rowCount) throw new AppError(404,'NOT_FOUND','Evidence not found.');
+      const removed=await c.query(`INSERT INTO orderflow.evidence_removals(file_id,request_id,removed_by)
+        VALUES($1,$2,$3) ON CONFLICT(file_id) DO NOTHING RETURNING file_id`,[fileId,targetId,actor.id]);
+      if(!removed.rowCount) return;
+      await c.query(`INSERT INTO orderflow.background_jobs(kind,requested_by,dedupe_key,payload)
+        VALUES('EVIDENCE_DELETE',$1,$2,$3)`,[actor.id,'evidence-delete:'+fileId,JSON.stringify({fileId,storageKey:file.rows[0].storage_key})]);
+      await c.query(`INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id,details)
+        VALUES($1,'EVIDENCE_DELETE','evidence_file',$2,$3)`,[actor.id,fileId,JSON.stringify({requestId:targetId,filename:file.rows[0].filename})]);
+    });
+    res.status(204).end();
+  });
   router.get('/evidence/:id/file',requireRole('STAFF','MANAGER'),async(req,res) => {
     const fileId=id.parse(req.params.id),actor=res.locals.actor as Actor;
     const found=await pool.query(`SELECT f.storage_key,f.filename,f.content_type,
       (SELECT discrepancy_id::text FROM orderflow.discrepancy_evidence WHERE file_id=f.id LIMIT 1) AS discrepancy,
       (SELECT request_id::text FROM orderflow.stock_request_evidence WHERE file_id=f.id LIMIT 1) AS request
-      FROM orderflow.evidence_files f WHERE f.id=$1`,[fileId]);
+      FROM orderflow.evidence_files f WHERE f.id=$1
+      AND NOT EXISTS(SELECT 1 FROM orderflow.evidence_removals r WHERE r.file_id=f.id)`,[fileId]);
     if(!found.rowCount) throw new AppError(404,'NOT_FOUND','Evidence not found.');
     const row=found.rows[0];
     if(row.discrepancy) await checkTarget(pool,'discrepancy',row.discrepancy,actor);

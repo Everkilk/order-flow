@@ -224,6 +224,8 @@ export async function runOneJob(pool:pg.Pool,config:Config):Promise<boolean> {
     if (job.kind==='IMPORT_VALIDATE') await validateImport(pool,config,job.id);
     else if (job.kind==='IMPORT_COMMIT') await commitImport(pool,config,id.parse(job.payload.importId));
     else if (job.kind==='EXPORT_CSV') await exportCsv(pool,config,job.id);
+    else if (job.kind==='EVIDENCE_DELETE') await removeStoredFile(config,z.string().regex(/^evidence\/[0-9a-f-]{36}\.bin$/).parse(job.payload.storageKey));
+    else if (job.kind==='UPLOAD_DELETE') await removeStoredFile(config,z.string().regex(/^(?:evidence\/[0-9a-f-]{36}\.bin|imports\/[0-9a-f-]{36}\.csv)$/).parse(job.payload.storageKey));
     else throw new Error('UNKNOWN_JOB_KIND');
     await withTransaction(pool,async c => {
       await c.query(`UPDATE orderflow.background_jobs SET status='DONE',lease_until=NULL WHERE id=$1`,[job.id]);

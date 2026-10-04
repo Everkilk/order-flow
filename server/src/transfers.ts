@@ -3,7 +3,7 @@ import type pg from 'pg';
 import { Decimal } from 'decimal.js';
 import { z } from 'zod';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { postInventoryEvent, runInventoryCommand } from './inventory-write.js';
 import { notifyManagers, notifyUser, notifyWarehouseStaff } from './notifications.js';
@@ -41,7 +41,7 @@ export function transferRoutes(pool: pg.Pool): Router {
     if (input.sourceWarehouseId===input.destinationWarehouseId)
       throw new AppError(422,'INVALID_WAREHOUSE','Source and destination must differ.');
     if (!warehouseAllowed(actor,input.sourceWarehouseId)) throw new AppError(403,'FORBIDDEN','Source warehouse access is required.');
-    const row=await withTransaction(pool,async c => {
+    const row=await withMutation(pool,req,actor,async c => {
       const warehouses=await c.query(`SELECT id::text,active FROM orderflow.warehouses WHERE id=ANY($1::bigint[])`,
         [[input.sourceWarehouseId,input.destinationWarehouseId]]);
       if (warehouses.rowCount!==2 || warehouses.rows.some(w=>!w.active))
@@ -78,7 +78,7 @@ export function transferRoutes(pool: pg.Pool): Router {
     const transferId=id.parse(req.params.id),input=items.parse(req.body),actor=res.locals.actor as Actor;
     if (new Set(input.items.map(line=>line.productId)).size!==input.items.length)
       throw new AppError(422,'DUPLICATE_ITEM','A product appears more than once.');
-    const revision=await withTransaction(pool,async c => {
+    const revision=await withMutation(pool,req,actor,async c => {
       const found=await c.query(`SELECT source_warehouse_id::text,created_by::text,status,revision
         FROM orderflow.transfers WHERE id=$1 FOR UPDATE`,[transferId]);
       if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Transfer not found.');

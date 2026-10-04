@@ -1,7 +1,7 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, stat, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -631,6 +631,11 @@ test('product CSV import validates before commit and export runs in the worker',
   assert.equal(await runOneJob(pool,appConfig),true);
   const done=await request('/api/imports/'+upload.id);
   assert.equal(done.data.status,'COMMITTED');
+  const commitReplay=await fetch(base+'/api/imports/'+upload.id+'/commit',{
+    method:'POST',headers:{Cookie:cookie,'Idempotency-Key':upload.commitKey},
+  });
+  assert.equal(commitReplay.status,202);
+  assert.equal((await commitReplay.json()).status,'COMMITTED');
   assert.ok((await request('/api/products?q='+sku)).data.items.some((item:{sku:string})=>item.sku===sku));
   const queued=await request('/api/exports','POST',{kind:'PRODUCTS'});
   assert.equal(queued.response.status,202);
@@ -1123,4 +1128,256 @@ test('frontend list and detail contracts expose recoverable jobs and document co
   assert.equal(stockRequest.response.status,200);
   assert.ok('decisionReason' in stockRequest.data);
   assert.match(movements.data.items[0].eventId,/^[1-9]\d*$/);
+});
+
+async function replayRequest(path:string,method:string,key:string,body?:unknown,auth=cookie) {
+  const response=await fetch(base+path,{method,headers:{...(auth?{Cookie:auth}:{}),
+    'Idempotency-Key':key,...(body===undefined?{}:{'Content-Type':'application/json'})},
+    ...(body===undefined?{}:{body:JSON.stringify(body)})});
+  return {response,data:response.status===204?null:await response.json() as any};
+}
+
+async function testActor(role:'STAFF'|'VIEWER'='STAFF') {
+  const email=`repair-${randomUUID()}@example.invalid`;
+  const created=await request('/api/users','POST',{email,displayName:'Repair tester',role,password});
+  assert.equal(created.response.status,201);
+  await request(`/api/users/${created.data.id}/warehouses`,'PUT',{warehouseIds:[String(example.warehouse)]});
+  await client.query('UPDATE orderflow.users SET must_change_password=false WHERE id=$1',[created.data.id]);
+  const login=await request('/api/auth/login','POST',{email,password});
+  assert.equal(login.response.status,200);
+  return {id:created.data.id as string,cookie:login.response.headers.get('set-cookie')!.split(';')[0]};
+}
+
+test('logical stock submissions replay once, reject conflicts and allow intentional identical requests',async()=>{
+  const key=randomUUID(),reason='Replay-'+randomUUID();
+  const body={requestType:'DAMAGE',warehouseId:String(example.warehouse),productId:String(example.product),quantity:'1',reason};
+  const [first,second]=await Promise.all([replayRequest('/api/stock-requests','POST',key,body),replayRequest('/api/stock-requests','POST',key,body)]);
+  assert.equal(first.response.status,201,JSON.stringify(first.data));
+  assert.equal(second.response.status,201,JSON.stringify(second.data));
+  assert.deepEqual(first.data,second.data);
+  // Retrying after the caller discarded a committed result models a lost response.
+  const retry=await replayRequest('/api/stock-requests','POST',key,body);
+  assert.deepEqual(retry.data,first.data);
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.stock_change_requests WHERE reason=$1',[reason])).rows[0].count,1);
+  assert.equal((await client.query("SELECT count(*)::int AS count FROM orderflow.audit_events WHERE action='STOCK_REQUEST_CREATE' AND entity_id=$1",[first.data.id])).rows[0].count,1);
+  const notifications=await client.query('SELECT user_id,count(*)::int AS count FROM orderflow.notifications WHERE dedupe_key=$1 GROUP BY user_id',['stock-request:'+first.data.id]);
+  assert.ok(notifications.rowCount);
+  assert.ok(notifications.rows.every(row=>row.count===1));
+  assert.equal((await replayRequest('/api/stock-requests','POST',key,{...body,quantity:'2'})).response.status,409);
+  const other=await testActor();
+  assert.equal((await replayRequest('/api/stock-requests','POST',key,body,other.cookie)).response.status,409);
+  const intentional=await replayRequest('/api/stock-requests','POST',randomUUID(),body);
+  assert.equal(intentional.response.status,201);
+  assert.notEqual(intentional.data.id,first.data.id);
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.stock_change_requests WHERE reason=$1',[reason])).rows[0].count,2);
+  const stored=await client.query('SELECT result::text,request_hash FROM orderflow.mutation_results WHERE key=$1',[key]);
+  assert.ok(!stored.rows[0].result.includes(reason));
+  assert.match(stored.rows[0].request_hash,/^[a-f0-9]{64}$/);
+  const recovered=await request('/api/submissions/'+key);
+  assert.equal(recovered.response.status,200);
+  assert.equal(recovered.data.state,'COMMITTED');assert.equal(recovered.data.result.id,first.data.id);
+  assert.equal((await request('/api/submissions/'+key,'GET',undefined,other.cookie)).response.status,403);
+  assert.equal((await request('/api/submissions/'+randomUUID())).data.state,'UNCONFIRMED');
+  assert.equal((await request('/api/submissions/'+key,'GET',undefined,'')).response.status,401);
+});
+
+test('return search and links distinguish internal ID from reference and reject unfinished orders',async()=>{
+  const existing=await client.query("SELECT id::text,order_number FROM orderflow.orders WHERE status='FULFILLED' AND EXISTS(SELECT 1 FROM orderflow.order_items i WHERE i.order_id=orders.id AND i.warehouse_id=$1) ORDER BY id LIMIT 1",[example.warehouse]);
+  assert.ok(existing.rowCount);
+  const fulfilled=existing.rows[0];
+  const unfinished=await request('/api/orders','POST',{orderNumber:'REFERENCE-'+fulfilled.id+'-'+randomUUID()});
+  assert.equal(unfinished.response.status,201);
+  assert.equal((await request('/api/returns','POST',{returnNumber:randomUUID(),orderId:unfinished.data.id,warehouseId:String(example.warehouse),reason:'Must reject draft'})).response.status,409);
+  const search=await request('/api/orders?status=FULFILLED&id='+fulfilled.id);
+  assert.equal(search.response.status,200);
+  assert.equal(search.data.items.length,1);
+  assert.equal(search.data.items[0].orderNumber,fulfilled.order_number);
+  assert.equal((await request('/api/orders?status=FULFILLED&id='+unfinished.data.id)).data.items.length,0);
+  const byReference=await request('/api/orders?status=FULFILLED&q='+encodeURIComponent(fulfilled.order_number));
+  assert.ok(byReference.data.items.some((row:any)=>row.id===fulfilled.id));
+  const created=await request('/api/returns','POST',{returnNumber:randomUUID(),orderId:fulfilled.id,warehouseId:String(example.warehouse),reason:'Identity test'});
+  assert.equal(created.response.status,201,JSON.stringify(created.data));
+  const detail=await request('/api/returns/'+created.data.id);
+  assert.equal(detail.data.orderId,fulfilled.id);
+  assert.equal(detail.data.orderNumber,fulfilled.order_number);
+  const otherWarehouse=await request('/api/warehouses','POST',{code:'RET-'+randomUUID().slice(0,8),name:'Unrelated return warehouse'});
+  assert.equal((await request('/api/returns','POST',{returnNumber:randomUUID(),orderId:fulfilled.id,warehouseId:otherWarehouse.data.id,reason:'Wrong warehouse'})).response.status,422);
+  const stranger=await testActor();
+  assert.equal((await request('/api/orders?status=FULFILLED&id='+fulfilled.id,'GET',undefined,stranger.cookie)).data.items.length,0);
+  assert.equal((await request('/api/returns','POST',{returnNumber:randomUUID(),orderId:fulfilled.id,warehouseId:String(example.warehouse),reason:'Not mine'},stranger.cookie)).response.status,403);
+});
+
+test('stock evidence deletion is creator-only, audited, replay-safe, physically cleaned and locked after decision',async()=>{
+  const owner=await testActor(),colleague=await testActor(),viewer=await testActor('VIEWER');
+  const created=await request('/api/stock-requests','POST',{requestType:'LOSS',warehouseId:String(example.warehouse),productId:String(example.product),quantity:'1',reason:'Evidence repair'},owner.cookie);
+  assert.equal(created.response.status,201);
+  const target='/api/evidence/stock-requests/'+created.data.id;
+  const bytes=Uint8Array.from([137,80,78,71,13,10,26,10,1]);
+  const uploadKey=randomUUID();
+  const upload=async(key:string=uploadKey,content=bytes,name='repair.png')=>{
+    const body=new FormData();body.append('file',new Blob([content],{type:'image/png'}),name);
+    const response=await fetch(base+target,{method:'POST',headers:{Cookie:owner.cookie,'Idempotency-Key':key},body});
+    return {response,data:await response.json() as any};
+  };
+  const [first,replayed]=await Promise.all([upload(),upload()]);
+  assert.equal(first.response.status,201,JSON.stringify(first.data));
+  assert.equal(replayed.response.status,201);
+  assert.deepEqual(first.data,replayed.data);
+  assert.equal((await request(target,'GET',undefined,owner.cookie)).data.items.length,1);
+  assert.equal((await upload(uploadKey,bytes,'changed.png')).response.status,409);
+  assert.equal((await upload(uploadKey,Uint8Array.from([...bytes,2]))).response.status,409);
+  const path=target+'/'+first.data.id;
+  assert.equal((await request(target,'GET',undefined,cookie)).data.canDelete,false);
+  for(const auth of [cookie,colleague.cookie,viewer.cookie,'']) {
+    assert.equal((await replayRequest(path,'DELETE',randomUUID(),undefined,auth)).response.status,auth?403:401);
+  }
+  assert.equal((await replayRequest(target+'/99999999','DELETE',randomUUID(),undefined,owner.cookie)).response.status,404);
+  const key=randomUUID();
+  const removed=await replayRequest(path,'DELETE',key,undefined,owner.cookie);
+  assert.equal(removed.response.status,204);
+  assert.equal((await replayRequest(path,'DELETE',key,undefined,owner.cookie)).response.status,204);
+  assert.equal((await request('/api/evidence/'+first.data.id+'/file','GET',undefined,owner.cookie)).response.status,404);
+  const list=await request(target,'GET',undefined,owner.cookie);
+  assert.equal(list.data.items.length,0);
+  assert.equal(list.data.removed.length,1);
+  assert.equal(list.data.removed[0].filename,'repair.png');
+  assert.equal(list.data.removed[0].removedBy,'Repair tester');
+  assert.ok(!JSON.stringify(list.data).includes('storageKey'));
+  const stored=await client.query('SELECT storage_key FROM orderflow.evidence_files WHERE id=$1',[first.data.id]);
+  const storedPath=storagePath(appConfig,stored.rows[0].storage_key);
+  assert.ok((await stat(storedPath)).isFile());
+  // Isolate this job's schedule, preserving other local jobs for later processing.
+  const jobs=await client.query("SELECT id,available_at FROM orderflow.background_jobs WHERE status='PENDING'");
+  await client.query("UPDATE orderflow.background_jobs SET available_at=now()+interval '1 day' WHERE status='PENDING'");
+  await client.query("UPDATE orderflow.background_jobs SET available_at=now() WHERE dedupe_key=$1",['evidence-delete:'+first.data.id]);
+  try {assert.equal(await runOneJob(pool,appConfig),true);} finally {
+    for(const job of jobs.rows) await client.query('UPDATE orderflow.background_jobs SET available_at=$2 WHERE id=$1',[job.id,job.available_at]);
+  }
+  await assert.rejects(stat(storedPath),{code:'ENOENT'});
+  assert.equal((await request(target,'GET',undefined,owner.cookie)).data.removed[0].cleanupStatus,'DONE');
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.evidence_removals WHERE file_id=$1',[first.data.id])).rows[0].count,1);
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.background_jobs WHERE dedupe_key=$1',['evidence-delete:'+first.data.id])).rows[0].count,1);
+  const second=await upload(randomUUID());assert.equal(second.response.status,201);
+  const decision=await replayRequest('/api/stock-requests/'+created.data.id+'/decision','POST',randomUUID(),{decision:'REJECTED',reason:'Evidence finalized'});
+  assert.equal(decision.response.status,200);
+  const locked=await request(target,'GET',undefined,owner.cookie);
+  assert.equal(locked.data.canUpload,false);assert.equal(locked.data.canDelete,false);
+  assert.equal((await upload(randomUUID())).response.status,409);
+  assert.equal((await replayRequest(target+'/'+second.data.id,'DELETE',randomUUID(),undefined,owner.cookie)).response.status,409);
+  assert.equal((await request(target,'GET',undefined,owner.cookie)).data.items.length,1);
+});
+
+test('failed local evidence cleanup is retried and never marked done prematurely',async()=>{
+  const key='evidence/'+randomUUID()+'.bin',path=storagePath(appConfig,key);
+  await mkdir(path);await writeFile(join(path,'blocked'),'not an evidence file');
+  const job=await client.query(`INSERT INTO orderflow.background_jobs(kind,requested_by,dedupe_key,payload)
+    VALUES('EVIDENCE_DELETE',$1,$2,$3) RETURNING id`,[example.manager,'cleanup-test:'+randomUUID(),JSON.stringify({storageKey:key})]);
+  const jobs=await client.query("SELECT id,available_at FROM orderflow.background_jobs WHERE status='PENDING'");
+  await client.query("UPDATE orderflow.background_jobs SET available_at=now()+interval '1 day' WHERE status='PENDING'");
+  const run=async()=>{await client.query('UPDATE orderflow.background_jobs SET available_at=now() WHERE id=$1',[job.rows[0].id]);assert.equal(await runOneJob(pool,appConfig),true);};
+  try {
+    await run();
+    const failed=await client.query('SELECT status,attempts,last_error_code FROM orderflow.background_jobs WHERE id=$1',[job.rows[0].id]);
+    assert.equal(failed.rows[0].status,'PENDING');assert.equal(failed.rows[0].attempts,1);assert.ok(failed.rows[0].last_error_code);
+    await rm(join(path,'blocked'));await rm(path,{recursive:true});
+    await run();
+    assert.equal((await client.query('SELECT status,attempts FROM orderflow.background_jobs WHERE id=$1',[job.rows[0].id])).rows[0].status,'DONE');
+  } finally {for(const row of jobs.rows) await client.query('UPDATE orderflow.background_jobs SET available_at=$2 WHERE id=$1',[row.id,row.available_at]);}
+});
+
+test('read-all replay preserves later unread notifications and exposes translated message parameters',async()=>{
+  const actor=await testActor();
+  const add=async(title:string,body:string,eventClass='ORDER_ASSIGNED')=>(await client.query(`INSERT INTO orderflow.notifications
+    (user_id,event_class,title,body,target_path,dedupe_key) VALUES($1,$2,$3,$4,'/orders/29',$5) RETURNING id::text`,
+    [actor.id,eventClass,title,body,randomUUID()])).rows[0].id;
+  const first=await add('Order assigned','Order Pending\n29 is assigned to you.');
+  const key=randomUUID();
+  assert.equal((await replayRequest('/api/notifications/read-all','POST',key,{},actor.cookie)).response.status,204);
+  const later=await add('Export ready','Your CSV export is ready to download.','EXPORT_COMPLETE');
+  assert.equal((await replayRequest('/api/notifications/read-all','POST',key,{},actor.cookie)).response.status,204);
+  const page=await request('/api/notifications','GET',undefined,actor.cookie);
+  assert.ok(page.data.items.find((row:any)=>row.id===first).readAt);
+  assert.equal(page.data.items.find((row:any)=>row.id===later).readAt,null);
+  const structured=page.data.items.find((row:any)=>row.id===first);
+  assert.equal(structured.messageKey,'Order {document} is assigned to you.');
+  assert.equal(structured.messageValues.document,'Pending\n29');
+});
+
+test('evidence deletion and a decision serialize without changing inventory',async()=>{
+  const owner=await testActor();
+  const create=await request('/api/stock-requests','POST',{requestType:'LOSS',warehouseId:String(example.warehouse),productId:String(example.product),quantity:'1',reason:'Concurrent evidence test'},owner.cookie);
+  const target='/api/evidence/stock-requests/'+create.data.id;
+  const body=new FormData();body.append('file',new Blob([Uint8Array.from([137,80,78,71,13,10,26,10])],{type:'image/png'}),'race.png');
+  const upload=await fetch(base+target,{method:'POST',headers:{Cookie:owner.cookie,'Idempotency-Key':randomUUID()},body});
+  assert.equal(upload.status,201);const file=await upload.json() as any;
+  const before=await client.query('SELECT count(*)::int AS count FROM orderflow.inventory_ledger');
+  const [deletion,decision]=await Promise.all([
+    replayRequest(target+'/'+file.id,'DELETE',randomUUID(),undefined,owner.cookie),
+    replayRequest('/api/stock-requests/'+create.data.id+'/decision','POST',randomUUID(),{decision:'REJECTED',reason:'Concurrent decision'}),
+  ]);
+  assert.equal(decision.response.status,200);
+  assert.ok([204,409].includes(deletion.response.status));
+  const evidence=await request(target,'GET',undefined,owner.cookie);
+  assert.equal(evidence.data.canDelete,false);assert.equal(evidence.data.canUpload,false);
+  assert.equal(evidence.data.removed.length,deletion.response.status===204?1:0);
+  assert.equal(evidence.data.items.length,deletion.response.status===204?0:1);
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.inventory_ledger')).rows[0].count,before.rows[0].count);
+});
+
+test('mutation replay and recovery reject changed warehouse permissions',async()=>{
+  const actor=await testActor(),key=randomUUID();
+  const body={requestType:'DAMAGE',warehouseId:String(example.warehouse),productId:String(example.product),quantity:'1',reason:'Permission snapshot'};
+  assert.equal((await replayRequest('/api/stock-requests','POST',key,body,actor.cookie)).response.status,201);
+  await client.query('DELETE FROM orderflow.user_warehouses WHERE user_id=$1',[actor.id]);
+  assert.equal((await replayRequest('/api/stock-requests','POST',key,body,actor.cookie)).response.status,403);
+  assert.equal((await request('/api/submissions/'+key,'GET',undefined,actor.cookie)).response.status,403);
+});
+
+test('catalog, references, user administration and document saves replay without extra effects',async()=>{
+  const verify=async(path:string,method:string,body:unknown,expected:number)=>{
+    const key=randomUUID();const [a,b]=await Promise.all([replayRequest(path,method,key,body),replayRequest(path,method,key,body)]);
+    assert.equal(a.response.status,expected,JSON.stringify(a.data));assert.equal(b.response.status,expected,JSON.stringify(b.data));assert.deepEqual(a.data,b.data);
+    assert.deepEqual((await replayRequest(path,method,key,body)).data,a.data);return a.data;
+  };
+  const tag=randomUUID().slice(0,8);
+  const category=await verify('/api/categories','POST',{name:'Replay '+tag},201);
+  const unit=await verify('/api/units','POST',{code:'RP'+tag,name:'Replay piece',decimalPlaces:0},201);
+  const warehouse=await verify('/api/warehouses','POST',{code:'RP'+tag,name:'Replay warehouse'},201);
+  const supplier=await verify('/api/suppliers','POST',{name:'Replay supplier '+tag},201);
+  await verify('/api/categories/'+category.id+'/attributes','POST',{key:'label',label:'Replay label',dataType:'string'},201);
+  const product=await verify('/api/products','POST',{sku:'RP'+tag,name:'Replay product',categoryId:category.id,unitId:unit.id,attributes:{}},201);
+  await verify('/api/products/'+product.id+'/suppliers/'+supplier.id,'PUT',{supplierSku:'RP'+tag,primarySupplier:true,cost:'1',currency:'USD'},204);
+  await verify('/api/warehouses/'+warehouse.id+'/thresholds/'+product.id,'PUT',{threshold:'1'},204);
+  const user=await verify('/api/users','POST',{email:'replay-'+tag+'@example.invalid',displayName:'Replay user',role:'STAFF',password},201);
+  await verify('/api/users/'+user.id,'PATCH',{displayName:'Replay edited'},204);
+  await verify('/api/users/'+user.id+'/warehouses','PUT',{warehouseIds:[warehouse.id]},204);
+  await verify('/api/users/'+user.id+'/reset-password','POST',{temporaryPassword:'Another-local-fixture-2026!'},204);
+  const receipt=await verify('/api/receipts','POST',{receiptNumber:'RP'+tag,kind:'INBOUND',warehouseId:warehouse.id},201);
+  await verify('/api/receipts/'+receipt.id+'/items','PUT',{expectedRevision:0,items:[{productId:product.id,quantity:'1'}]},200);
+  assert.equal((await request('/api/receipts/'+receipt.id)).data.revision,'1');
+  const order=await verify('/api/orders','POST',{orderNumber:'RP'+tag},201);
+  await verify('/api/orders/'+order.id+'/items','PUT',{expectedRevision:0,items:[{productId:product.id,warehouseId:warehouse.id,quantity:'1'}]},200);
+  const transfer=await verify('/api/transfers','POST',{transferNumber:'RP'+tag,sourceWarehouseId:warehouse.id,destinationWarehouseId:String(example.warehouse)},201);
+  await verify('/api/transfers/'+transfer.id+'/items','PUT',{expectedRevision:0,items:[{productId:product.id,requestedQty:'1'}]},200);
+  await verify('/api/exports','POST',{kind:'PRODUCTS'},202);
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.products WHERE sku=$1',['RP'+tag])).rows[0].count,1);
+  assert.equal((await client.query('SELECT count(*)::int AS count FROM orderflow.receipt_items WHERE receipt_id=$1',[receipt.id])).rows[0].count,1);
+});
+
+test('evidence cleanup has bounded retries and exposes a terminal failure',async()=>{
+  const key='evidence/'+randomUUID()+'.bin',path=storagePath(appConfig,key);
+  await mkdir(path);await writeFile(join(path,'blocked'),'fixture');
+  const inserted=await client.query(`INSERT INTO orderflow.background_jobs(kind,requested_by,dedupe_key,payload)
+    VALUES('EVIDENCE_DELETE',$1,$2,$3) RETURNING id`,[example.manager,'terminal-test:'+randomUUID(),JSON.stringify({storageKey:key})]);
+  const jobs=await client.query("SELECT id,available_at FROM orderflow.background_jobs WHERE status='PENDING'");
+  await client.query("UPDATE orderflow.background_jobs SET available_at=now()+interval '1 day' WHERE status='PENDING'");
+  try {
+    for(let attempt=0;attempt<3;attempt++){await client.query('UPDATE orderflow.background_jobs SET available_at=now() WHERE id=$1',[inserted.rows[0].id]);assert.equal(await runOneJob(pool,appConfig),true);}
+    const failed=(await client.query('SELECT status,attempts,last_error_code FROM orderflow.background_jobs WHERE id=$1',[inserted.rows[0].id])).rows[0];
+    assert.equal(failed.status,'DEAD');assert.equal(failed.attempts,3);assert.ok(failed.last_error_code);
+    assert.ok((await stat(path)).isDirectory());
+  } finally {
+    await rm(join(path,'blocked'));await rm(path,{recursive:true});
+    for(const job of jobs.rows)await client.query('UPDATE orderflow.background_jobs SET available_at=$2 WHERE id=$1',[job.id,job.available_at]);
+  }
 });

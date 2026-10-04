@@ -76,7 +76,10 @@ export async function storedFileExists(config:Config,key:string) {
 }
 
 export async function removeStoredFile(config:Config,key:string) {
-  await rm(storagePath(config,key),{force:true}).catch(()=>{});
+  await rm(storagePath(config,key),{force:true}).catch(error=>{
+    // S3 is authoritative there; an unavailable local cache must not block its deletion.
+    if(config.STORAGE_DRIVER!=='s3') throw error;
+  });
   if(config.STORAGE_DRIVER==='s3') await s3(config).send(new DeleteObjectCommand({Bucket:bucket(config),Key:validKey(key)}));
 }
 

@@ -3,7 +3,7 @@ import type pg from 'pg';
 import { Decimal } from 'decimal.js';
 import { z } from 'zod';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { postInventoryEvent, runInventoryCommand } from './inventory-write.js';
 import { notifyManagers, notifyUser } from './notifications.js';
@@ -45,7 +45,7 @@ export function stockApprovalRoutes(pool: pg.Pool): Router {
   });
   router.post('/stock-requests',requireRole('STAFF','MANAGER'),async(req,res) => {
     const input=requestInput.parse(req.body),actor=res.locals.actor as Actor;
-    const row=await withTransaction(pool,async c => {
+    const row=await withMutation(pool,req,actor,async c => {
       let warehouseId:string|null=null,productId:string|null=null,delta:string|null=null;
       let counted:string|null=null,observed:string|null=null,version:string|null=null,eventId:string|null=null;
       if (input.requestType==='REVERSAL') {

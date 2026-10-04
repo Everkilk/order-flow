@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { requireActor, requireRole, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 
 const id = z.string().regex(/^[1-9]\d*$/);
@@ -15,7 +15,7 @@ export function referenceRoutes(pool: pg.Pool): Router {
   const router = Router();
   router.post('/units', requireRole('MANAGER'), async (req,res) => {
     const data = unitInput.parse(req.body), actor = res.locals.actor as Actor;
-    const row = await withTransaction(pool, async c => {
+    const row = await withMutation(pool,req,actor,async c => {
       const result = await c.query('INSERT INTO orderflow.units(code,name,decimal_places) VALUES($1,$2,$3) RETURNING id::text,code,name,decimal_places AS "decimalPlaces"', [data.code,data.name,data.decimalPlaces]);
       await c.query("INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id) VALUES($1,'UNIT_CREATE','unit',$2)",[actor.id,result.rows[0].id]);
       return result.rows[0];
@@ -24,7 +24,7 @@ export function referenceRoutes(pool: pg.Pool): Router {
   });
   router.post('/warehouses', requireRole('MANAGER'), async (req,res) => {
     const data = warehouseInput.parse(req.body), actor = res.locals.actor as Actor;
-    const row = await withTransaction(pool, async c => {
+    const row = await withMutation(pool,req,actor,async c => {
       const result = await c.query('INSERT INTO orderflow.warehouses(code,name,address) VALUES($1,$2,$3) RETURNING id::text,code,name,address,active', [data.code,data.name,data.address ?? null]);
       await c.query("INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id) VALUES($1,'WAREHOUSE_CREATE','warehouse',$2)",[actor.id,result.rows[0].id]);
       return result.rows[0];
@@ -37,7 +37,7 @@ export function referenceRoutes(pool: pg.Pool): Router {
   });
   router.post('/suppliers', requireRole('MANAGER'), async (req,res) => {
     const data = supplierInput.parse(req.body), actor = res.locals.actor as Actor;
-    const row = await withTransaction(pool, async c => {
+    const row = await withMutation(pool,req,actor,async c => {
       const result = await c.query('INSERT INTO orderflow.suppliers(name,email,phone) VALUES($1,$2,$3) RETURNING id::text,name,email,phone,active', [data.name,data.email ?? null,data.phone ?? null]);
       await c.query("INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id) VALUES($1,'SUPPLIER_CREATE','supplier',$2)",[actor.id,result.rows[0].id]);
       return result.rows[0];
@@ -49,7 +49,7 @@ export function referenceRoutes(pool: pg.Pool): Router {
     const data=thresholdInput.parse(req.body), actor=res.locals.actor as Actor;
     if (data.criticalThreshold != null && Number(data.criticalThreshold)>Number(data.threshold))
       throw new AppError(422,'INVALID_THRESHOLD','Critical threshold exceeds threshold.');
-    await withTransaction(pool, async c => {
+    await withMutation(pool,req,actor,async c => {
       await c.query(`INSERT INTO orderflow.low_stock_thresholds(warehouse_id,product_id,threshold,critical_threshold)
         VALUES($1,$2,$3,$4) ON CONFLICT(warehouse_id,product_id)
         DO UPDATE SET threshold=excluded.threshold,critical_threshold=excluded.critical_threshold`,

@@ -1,3 +1,4 @@
+import { cleanupUpload } from './upload-cleanup.js';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
@@ -8,10 +9,10 @@ import type pg from 'pg';
 import { z } from 'zod';
 import type { Config } from './config.js';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { sha256File } from './file-integrity.js';
-import { prepareWrite, publishFile, removeStoredFile, withLocalFile, openStoredStream } from './storage.js';
+import { prepareWrite, publishFile,  withLocalFile, openStoredStream } from './storage.js';
 export { storagePath } from './storage.js';
 
 const id=z.string().regex(/^[1-9]\d*$/);
@@ -21,6 +22,7 @@ const maxFileBytes=20*1024*1024;
 const previewLimit=20;
 
 async function receiveCsv(req: import('express').Request, path: string) {
+  let filename='',contentType='';
   if (!req.headers['content-type']?.startsWith('multipart/form-data;'))
     throw new AppError(415,'INVALID_CONTENT_TYPE','Upload a multipart CSV file in the file field.');
   await new Promise<void>((resolveUpload,rejectUpload) => {
@@ -30,6 +32,7 @@ async function receiveCsv(req: import('express').Request, path: string) {
     let saved:Promise<void>|null=null,limited=false,seen=false;
     parser.on('file',(field,file,info) => {
       seen=true;
+      filename=info.filename;contentType=info.mimeType;
       if (field!=='file' || !info.filename.toLowerCase().endsWith('.csv')) {
         file.resume();
         limited=true;
@@ -49,6 +52,7 @@ async function receiveCsv(req: import('express').Request, path: string) {
     req.on('aborted',()=>rejectUpload(new AppError(400,'UPLOAD_ABORTED','Upload was interrupted.')));
     req.pipe(parser);
   });
+  return {filename,contentType};
 }
 
 async function readCsvPreview(path:string) {
@@ -72,10 +76,13 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
   const router=Router();
   const uploadImport=(kind:'PRODUCTS'|'OPENING_STOCK'|'ORDERS'):RequestHandler => async(req,res) => {
     const actor=res.locals.actor as Actor,key=`imports/${randomUUID()}.csv`,path=await prepareWrite(config,key);
-    try { await receiveCsv(req,path); await publishFile(config,key); }
-    catch(error) { await removeStoredFile(config,key).catch(()=>{});throw error; }
+    let fingerprint: string,metadata:{filename:string;contentType:string};
+    try { metadata=await receiveCsv(req,path); fingerprint=await sha256File(path); await publishFile(config,key); }
+    catch(error) { await cleanupUpload(pool,config,key,actor.id);throw error; }
     try {
-      const row=await withTransaction(pool,async c => {
+      let created=false;
+      const row=await withMutation(pool,req,actor,async c => {
+        created=true;
         const job=await c.query(`INSERT INTO orderflow.background_jobs(kind,requested_by,dedupe_key)
           VALUES('IMPORT_VALIDATE',$1,$2) RETURNING id::text`,[actor.id,`import-validate:${key}`]);
         const importJob=await c.query(`INSERT INTO orderflow.import_jobs
@@ -83,9 +90,10 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
           VALUES($1,$2,$3,$4,$5) RETURNING id::text,kind,commit_key::text AS "commitKey",status`,
           [job.rows[0].id,actor.id,kind,key,randomUUID()]);
         return importJob.rows[0];
-      });
+      },{fingerprint,...metadata});
+      if(!created) await cleanupUpload(pool,config,key,actor.id);
       res.status(202).json(row);
-    } catch(error) { await removeStoredFile(config,key).catch(()=>{});throw error; }
+    } catch(error) { await cleanupUpload(pool,config,key,actor.id);throw error; }
   };
   router.post('/imports/products',requireRole('MANAGER'),uploadImport('PRODUCTS'));
   router.post('/imports/opening-stock',requireRole('MANAGER'),uploadImport('OPENING_STOCK'));
@@ -154,7 +162,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
   });
   router.post('/imports/:id/commit',requireRole('STAFF','MANAGER'),async(req,res) => {
     const importId=id.parse(req.params.id),key=z.uuid().parse(req.headers['idempotency-key']),actor=res.locals.actor as Actor;
-    const outcome=await withTransaction(pool,async c => {
+    const outcome=await withMutation(pool,req,actor,async c => {
       const found=await c.query(`SELECT status,kind,uploaded_by::text,commit_key::text
         FROM orderflow.import_jobs WHERE id=$1 FOR UPDATE`,[importId]);
       if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Import not found.');
@@ -168,7 +176,10 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
         [actor.id,`import-commit:${importId}`,JSON.stringify({importId})]);
       return {status:'QUEUED'};
     });
-    res.status(202).json(outcome);
+    // The stored replay result records the original enqueue. The job may have
+    // progressed by the time the client retries a lost response.
+    const current=await pool.query('SELECT status FROM orderflow.import_jobs WHERE id=$1',[importId]);
+    res.status(202).json({status: current.rows[0]?.status==='COMMITTED' ? 'COMMITTED' : current.rows[0]?.status==='FAILED' ? 'FAILED' : outcome.status});
   });
   router.post('/exports',requireRole('STAFF','MANAGER'),async(req,res) => {
     const input=exportInput.parse(req.body),actor=res.locals.actor as Actor;
@@ -176,7 +187,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
       throw new AppError(400,'WAREHOUSE_REQUIRED','Select a warehouse for this export.');
     if (input.warehouseId && !warehouseAllowed(actor,input.warehouseId))
       throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
-    const row=await withTransaction(pool,async c => {
+    const row=await withMutation(pool,req,actor,async c => {
       const job=await c.query(`INSERT INTO orderflow.background_jobs
         (kind,requested_by,dedupe_key,payload) VALUES('EXPORT_CSV',$1,$2,$3) RETURNING id::text`,
         [actor.id,`export:${randomUUID()}`,JSON.stringify(input)]);

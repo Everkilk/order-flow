@@ -3,6 +3,8 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { requireActor, sessionHashFromCookie, type Actor } from './auth.js';
 import { logger } from './errors.js';
+import { notificationMessage } from './notification-message.js';
+import { withMutation } from './mutations.js';
 
 const id=z.string().regex(/^[1-9]\d*$/);
 const filters=z.object({cursor:id.optional(),limit:z.coerce.number().int().min(1).max(100).default(50)}).strict();
@@ -51,6 +53,7 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
       ? (await pool.query('SELECT id::text FROM orderflow.notifications WHERE user_id=$1 ORDER BY id DESC LIMIT 1',[actor.id])).rows[0]?.id ?? '0'
       : streamCursor.parse(supplied);
     let last=since,closed=false,busy=false;
+    let pollTimer:ReturnType<typeof setInterval>|undefined,heartbeatTimer:ReturnType<typeof setInterval>|undefined;
     res.status(200);
     res.setHeader('Content-Type','text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control','no-cache, no-transform');
@@ -58,7 +61,8 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
     res.setHeader('X-Accel-Buffering','no');
     res.flushHeaders();
     res.write('retry: 3000\n: connected\n\n');
-    const closeForShutdown=()=>{closed=true;res.end();};
+    const stop=()=>{closed=true;clearInterval(pollTimer);clearInterval(heartbeatTimer);shutdownSignal?.removeEventListener('abort',closeForShutdown);};
+    const closeForShutdown=()=>{stop();res.end();};
     if (shutdownSignal?.aborted) {closeForShutdown();return;}
     shutdownSignal?.addEventListener('abort',closeForShutdown,{once:true});
     const poll=async () => {
@@ -74,7 +78,7 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
           ORDER BY id DESC LIMIT 1
         ) AS latest`,[tokenHash,actor.id,last]);
         if (closed) return;
-        if (!result.rows[0].valid) {res.end();return;}
+        if (!result.rows[0].valid) {closeForShutdown();return;}
         const latest=result.rows[0].latest as string|null;
         if (latest) {
           last=latest;
@@ -82,17 +86,12 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
         }
       } catch(error) {
         logger.error({err:error,requestId:res.locals.requestId},'notification stream failed');
-        res.end();
+        closeForShutdown();
       } finally {busy=false;}
     };
-    const pollTimer=setInterval(()=>{void poll();},3000);
-    const heartbeatTimer=setInterval(()=>{if(!closed) res.write(': heartbeat\n\n');},15000);
-    res.on('close',()=>{
-      closed=true;
-      clearInterval(pollTimer);
-      clearInterval(heartbeatTimer);
-      shutdownSignal?.removeEventListener('abort',closeForShutdown);
-    });
+    pollTimer=setInterval(()=>{void poll();},3000);
+    heartbeatTimer=setInterval(()=>{if(!closed) res.write(': heartbeat\n\n');},15000);
+    res.on('close',stop);
   });
   router.get('/notifications',requireActor,async(req,res) => {
     const input=filters.parse(req.query),actor=res.locals.actor as Actor;
@@ -101,7 +100,7 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
       FROM orderflow.notifications WHERE user_id=$1 AND ($2::bigint IS NULL OR id<$2)
       ORDER BY id DESC LIMIT $3`,[actor.id,input.cursor ?? null,input.limit+1]);
     const rows=result.rows.slice(0,input.limit);
-    res.json({items:rows,nextCursor:result.rows.length>input.limit ? rows.at(-1)?.id ?? null : null});
+    res.json({items:rows.map(row=>({...row,...notificationMessage(row)})),nextCursor:result.rows.length>input.limit ? rows.at(-1)?.id ?? null : null});
   });
   router.get('/notifications/unread-count',requireActor,async(_req,res) => {
     const actor=res.locals.actor as Actor;
@@ -113,14 +112,18 @@ export function notificationRoutes(pool: pg.Pool, shutdownSignal?: AbortSignal):
     z.object({}).strict().parse(req.body);
     const actor=res.locals.actor as Actor;
     // One statement marks its snapshot; notifications arriving later remain unread.
-    await pool.query(`UPDATE orderflow.notifications SET read_at=clock_timestamp()
-      WHERE user_id=$1 AND read_at IS NULL`,[actor.id]);
+    await withMutation(pool,req,actor,async client=>{
+      await client.query(`UPDATE orderflow.notifications SET read_at=clock_timestamp()
+        WHERE user_id=$1 AND read_at IS NULL`,[actor.id]);
+    });
     res.status(204).end();
   });
   router.post('/notifications/:id/read',requireActor,async(req,res) => {
     const notificationId=id.parse(req.params.id),actor=res.locals.actor as Actor;
-    await pool.query(`UPDATE orderflow.notifications SET read_at=coalesce(read_at,clock_timestamp())
-      WHERE id=$1 AND user_id=$2`,[notificationId,actor.id]);
+    await withMutation(pool,req,actor,async client=>{
+      await client.query(`UPDATE orderflow.notifications SET read_at=coalesce(read_at,clock_timestamp())
+        WHERE id=$1 AND user_id=$2`,[notificationId,actor.id]);
+    });
     res.status(204).end();
   });
   return router;

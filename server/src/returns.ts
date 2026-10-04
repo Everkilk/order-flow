@@ -3,7 +3,7 @@ import type pg from 'pg';
 import { Decimal } from 'decimal.js';
 import { z } from 'zod';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { postInventoryEvent, runInventoryCommand } from './inventory-write.js';
 
@@ -21,8 +21,8 @@ export function returnRoutes(pool: pg.Pool): Router {
     const actor=res.locals.actor as Actor;
     const result=await pool.query(`SELECT r.id::text,r.return_number AS "returnNumber",
       r.order_id::text AS "orderId",r.warehouse_id::text AS "warehouseId",
-      r.status,r.reason,r.created_at AS "createdAt"
-      FROM orderflow.order_returns r
+      r.status,r.reason,r.created_at AS "createdAt",o.order_number AS "orderNumber"
+      FROM orderflow.order_returns r JOIN orderflow.orders o ON o.id=r.order_id
       WHERE ($1::text IS NULL OR r.status=$1) AND ($2::bigint IS NULL OR r.id<$2)
         AND ($3 OR (r.received_by=$4 AND r.warehouse_id=ANY($5::bigint[])))
       ORDER BY r.id DESC LIMIT $6`,[input.status ?? null,input.cursor ?? null,
@@ -33,12 +33,17 @@ export function returnRoutes(pool: pg.Pool): Router {
   router.post('/returns',requireRole('STAFF','MANAGER'),async(req,res) => {
     const input=draft.parse(req.body),actor=res.locals.actor as Actor;
     if (!warehouseAllowed(actor,input.warehouseId)) throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
-    const row=await withTransaction(pool,async c => {
+    const row=await withMutation(pool,req,actor,async c => {
       const order=await c.query('SELECT status,created_by::text,assigned_to::text FROM orderflow.orders WHERE id=$1',[input.orderId]);
       if (!order.rowCount) throw new AppError(404,'NOT_FOUND','Order not found.');
       if (order.rows[0].status!=='FULFILLED') throw new AppError(409,'INVALID_STATUS','Only fulfilled orders can have returns.');
       if (actor.role==='STAFF' && ![order.rows[0].created_by,order.rows[0].assigned_to].includes(actor.id))
         throw new AppError(403,'FORBIDDEN','This order belongs to another staff member.');
+      const original=await c.query('SELECT warehouse_id::text FROM orderflow.order_items WHERE order_id=$1',[input.orderId]);
+      if(original.rows.some(line=>!warehouseAllowed(actor,line.warehouse_id)))
+        throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
+      if(!original.rows.some(line=>line.warehouse_id===input.warehouseId))
+        throw new AppError(422,'INVALID_WAREHOUSE','Choose a warehouse from this order.');
       const created=await c.query(`INSERT INTO orderflow.order_returns
         (return_number,order_id,warehouse_id,received_by,reason) VALUES($1,$2,$3,$4,$5)
         RETURNING id::text,return_number AS "returnNumber",order_id::text AS "orderId",status,revision`,
@@ -51,9 +56,9 @@ export function returnRoutes(pool: pg.Pool): Router {
   });
   router.get('/returns/:id',requireRole('STAFF','MANAGER'),async(req,res) => {
     const returnId=id.parse(req.params.id),actor=res.locals.actor as Actor;
-    const found=await pool.query(`SELECT id::text,return_number AS "returnNumber",order_id::text AS "orderId",
-      warehouse_id::text AS "warehouseId",received_by::text AS "receivedBy",status,reason,revision
-      FROM orderflow.order_returns WHERE id=$1`,[returnId]);
+    const found=await pool.query(`SELECT r.id::text,r.return_number AS "returnNumber",r.order_id::text AS "orderId",
+      r.warehouse_id::text AS "warehouseId",r.received_by::text AS "receivedBy",r.status,r.reason,r.revision,o.order_number AS "orderNumber"
+      FROM orderflow.order_returns r JOIN orderflow.orders o ON o.id=r.order_id WHERE r.id=$1`,[returnId]);
     if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Return not found.');
     if (!warehouseAllowed(actor,found.rows[0].warehouseId) ||
         (actor.role==='STAFF' && found.rows[0].receivedBy!==actor.id))
@@ -69,7 +74,7 @@ export function returnRoutes(pool: pg.Pool): Router {
     const returnId=id.parse(req.params.id),input=items.parse(req.body),actor=res.locals.actor as Actor;
     if (new Set(input.items.map(line=>line.orderItemId)).size!==input.items.length)
       throw new AppError(422,'DUPLICATE_ITEM','An order item appears more than once.');
-    const revision=await withTransaction(pool,async c => {
+    const revision=await withMutation(pool,req,actor,async c => {
       const found=await c.query(`SELECT order_id::text,warehouse_id::text,received_by::text,status,revision
         FROM orderflow.order_returns WHERE id=$1 FOR UPDATE`,[returnId]);
       if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Return not found.');

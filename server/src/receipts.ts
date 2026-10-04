@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { postInventoryEvent, runInventoryCommand } from './inventory-write.js';
 
@@ -38,7 +38,7 @@ export function receiptRoutes(pool: pg.Pool): Router {
     const input=draft.parse(req.body), actor=res.locals.actor as Actor;
     if (!warehouseAllowed(actor,input.warehouseId) || (input.kind==='OPENING' && actor.role!=='MANAGER'))
       throw new AppError(403,'FORBIDDEN','This receipt is not permitted.');
-    const row=await withTransaction(pool,async c => {
+    const row=await withMutation(pool,req,actor,async c => {
       const created=await c.query(`INSERT INTO orderflow.receipts(receipt_number,kind,warehouse_id,supplier_id,created_by,note)
         VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text,receipt_number AS "receiptNumber",kind,
         warehouse_id::text AS "warehouseId",status,revision`,
@@ -71,7 +71,7 @@ export function receiptRoutes(pool: pg.Pool): Router {
       throw new AppError(422,'DUPLICATE_ITEM','A product appears more than once.');
     for(const line of input.items) if ((line.unitCost==null)!==(line.currency==null))
       throw new AppError(422,'INVALID_COST','Cost and currency must be provided together.');
-    const revision=await withTransaction(pool,async c => {
+    const revision=await withMutation(pool,req,actor,async c => {
       const found=await c.query(`SELECT warehouse_id::text,kind,status,revision,created_by::text
         FROM orderflow.receipts WHERE id=$1 FOR UPDATE`,[receiptId]);
       if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Receipt not found.');

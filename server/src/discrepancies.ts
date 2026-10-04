@@ -56,8 +56,9 @@ export function discrepancyRoutes(pool: pg.Pool): Router {
       throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
     const list=await pool.query(`SELECT d.id::text,d.transfer_item_id::text AS "transferItemId",d.kind,
       d.reported_qty::text AS "reportedQty",d.resolved_qty::text AS "resolvedQty",
-      d.outstanding_qty::text AS "outstandingQty",d.status,d.reason
+      d.outstanding_qty::text AS "outstandingQty",d.status,d.reason,i.product_id::text AS "productId",p.sku,p.name
       FROM orderflow.discrepancy_status d JOIN orderflow.transfer_items i ON i.id=d.transfer_item_id
+      JOIN orderflow.products p ON p.id=i.product_id
       WHERE i.transfer_id=$1 ORDER BY d.id`,[transferId]);
     res.json({items:list.rows});
   });

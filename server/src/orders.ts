@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { requireRole, warehouseAllowed, type Actor } from './auth.js';
-import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { postInventoryEvent, runInventoryCommand, type Movement } from './inventory-write.js';
 import { notifyUser } from './notifications.js';
@@ -25,12 +25,15 @@ export function orderRoutes(pool: pg.Pool): Router {
   const router=Router();
   router.get('/orders',requireRole('STAFF','MANAGER'),async(req,res) => {
     const input=z.object({status:z.enum(['DRAFT','CONFIRMED','FULFILLED','CANCELLED']).optional(),
+      q:z.string().trim().max(120).optional(),id:id.optional(),
       cursor:id.optional(),limit:z.coerce.number().int().min(1).max(100).default(50)}).strict().parse(req.query);
     const actor=res.locals.actor as Actor;
     const result=await pool.query(`SELECT o.id::text,o.order_number AS "orderNumber",o.status,
       o.created_by::text AS "createdBy",o.assigned_to::text AS "assignedTo",o.created_at AS "createdAt"
       FROM orderflow.orders o WHERE ($1::text IS NULL OR o.status=$1)
       AND ($2::bigint IS NULL OR o.id<$2)
+      AND ($7::text IS NULL OR position(lower($7) in lower(o.order_number))>0 OR o.id::text=$7)
+      AND ($8::bigint IS NULL OR o.id=$8)
       AND ($3::text IN ('MANAGER','VIEWER') OR (o.created_by=$4 OR o.assigned_to=$4))
       AND ($3::text='MANAGER' OR (
         ($3::text='STAFF' AND NOT EXISTS(SELECT 1 FROM orderflow.order_items oi
@@ -39,14 +42,14 @@ export function orderRoutes(pool: pg.Pool): Router {
           WHERE oi.order_id=o.id AND oi.warehouse_id=ANY($5::bigint[]))
           AND NOT EXISTS(SELECT 1 FROM orderflow.order_items oi
           WHERE oi.order_id=o.id AND oi.warehouse_id<>ALL($5::bigint[])))))
-      ORDER BY o.id DESC LIMIT $6`,[input.status ?? null,input.cursor ?? null,actor.role,actor.id,actor.warehouses,input.limit+1]);
+      ORDER BY o.id DESC LIMIT $6`,[input.status ?? null,input.cursor ?? null,actor.role,actor.id,actor.warehouses,input.limit+1,input.q ?? null,input.id ?? null]);
     const rows=result.rows.slice(0,input.limit);
     res.json({items:rows,nextCursor:result.rows.length>input.limit ? rows.at(-1)?.id ?? null : null});
   });
   router.post('/orders',requireRole('STAFF','MANAGER'),async(req,res) => {
     const input=draft.parse(req.body),actor=res.locals.actor as Actor;
     if (input.assignedTo && actor.role!=='MANAGER') throw new AppError(403,'FORBIDDEN','Only managers assign orders.');
-    const row=await withTransaction(pool,async c => {
+    const row=await withMutation(pool,req,actor,async c => {
       if (input.assignedTo) {
         const user=await c.query('SELECT active,role FROM orderflow.users WHERE id=$1',[input.assignedTo]);
         if (!user.rowCount || !user.rows[0].active || user.rows[0].role!=='STAFF')
@@ -100,7 +103,7 @@ export function orderRoutes(pool: pg.Pool): Router {
       if ((line.unitPrice==null)!==(line.currency==null))
         throw new AppError(422,'INVALID_PRICE','Price and currency must be provided together.');
     }
-    const revision=await withTransaction(pool,async c => {
+    const revision=await withMutation(pool,req,actor,async c => {
       const found=await c.query('SELECT status,revision,created_by::text,assigned_to::text FROM orderflow.orders WHERE id=$1 FOR UPDATE',[orderId]);
       if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Order not found.');
       checkOwner(actor,found.rows[0]);

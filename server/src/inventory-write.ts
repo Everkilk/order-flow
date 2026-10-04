@@ -106,20 +106,27 @@ export async function runInventoryCommand<T extends object>(pool: pg.Pool, comma
   const requestHash = createHash('sha256').update(JSON.stringify(command.input)).digest('hex');
   return withTransaction(pool, async client => {
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[command.key]);
-    const prior = await client.query(`SELECT actor_id::text,action,target_id,request_hash,status,response
+    const permissions = await client.query(`SELECT role,coalesce((SELECT jsonb_agg(warehouse_id::text ORDER BY warehouse_id)
+      FROM orderflow.user_warehouses WHERE user_id=u.id),'[]'::jsonb) AS warehouses
+      FROM orderflow.users u WHERE id=$1 AND active`,[command.actorId]);
+    if (!permissions.rowCount) throw new AppError(403,'FORBIDDEN','This action is not permitted.');
+    const access = permissions.rows[0];
+    const prior = await client.query(`SELECT actor_id::text,action,target_id,request_hash,status,response,access_context
       FROM orderflow.api_commands WHERE idempotency_key=$1`,[command.key]);
     if (prior.rowCount) {
       const row = prior.rows[0];
       if (row.actor_id !== command.actorId || row.action !== command.action ||
           row.target_id !== command.targetId || row.request_hash !== requestHash)
         throw new AppError(409,'IDEMPOTENCY_CONFLICT','This idempotency key belongs to another request.');
+      if (row.access_context?.role!==access.role || JSON.stringify(row.access_context?.warehouses)!==JSON.stringify(access.warehouses))
+        throw new AppError(403,'PERMISSION_CHANGED','Your access changed. Refresh before continuing.');
       return {status:row.status,response:row.response as T};
     }
     const result = await work(client);
     await client.query(`INSERT INTO orderflow.api_commands
-      (idempotency_key,actor_id,action,target_id,request_hash,status,response)
-      VALUES($1,$2,$3,$4,$5,$6,$7)`,
-      [command.key,command.actorId,command.action,command.targetId,requestHash,result.status,JSON.stringify(result.response)]);
+      (idempotency_key,actor_id,action,target_id,request_hash,status,response,access_context)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [command.key,command.actorId,command.action,command.targetId,requestHash,result.status,JSON.stringify(result.response),JSON.stringify(access)]);
     return result;
   });
 }

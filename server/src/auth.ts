@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import type { Config } from './config.js';
 import { withTransaction } from './db.js';
+import { withMutation } from './mutations.js';
 
 export type Actor = { id: string; email: string; displayName: string; role: 'MANAGER' | 'STAFF' | 'VIEWER'; warehouses: string[]; mustChangePassword: boolean };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -133,7 +134,7 @@ export function authRoutes(pool: pg.Pool, config: Config): Router {
     const input = userInput.parse(req.body);
     const password = await passwordHash(input.password);
     const actor = res.locals.actor as Actor;
-    const id = await withTransaction(pool, async client => {
+    const id = await withMutation(pool,req,actor,async client => {
       const row = await client.query('INSERT INTO orderflow.users(email,display_name,password_hash,role) VALUES($1,$2,$3,$4) RETURNING id',
         [input.email, input.displayName, password, input.role]);
       await client.query("INSERT INTO orderflow.audit_events(actor_id,action,entity_type,entity_id) VALUES($1,'USER_CREATE','user',$2)", [actor.id, String(row.rows[0].id)]);
@@ -167,7 +168,7 @@ export function authRoutes(pool: pg.Pool, config: Config): Router {
     const input=z.object({temporaryPassword:z.string().min(12).max(1024)}).strict().parse(req.body);
     const actor=res.locals.actor as Actor;
     const nextHash=await passwordHash(input.temporaryPassword);
-    await withTransaction(pool,async c => {
+    await withMutation(pool,req,actor,async c => {
       const found=await c.query('SELECT 1 FROM orderflow.users WHERE id=$1 FOR UPDATE',[userId]);
       if(!found.rowCount) throw new AppError(404,'NOT_FOUND','User not found.');
       await c.query('UPDATE orderflow.users SET password_hash=$1,must_change_password=true WHERE id=$2',
@@ -184,7 +185,7 @@ export function authRoutes(pool: pg.Pool, config: Config): Router {
     const input = userUpdate.parse(req.body);
     if (Object.keys(input).length === 0) throw new AppError(400, 'VALIDATION_ERROR', 'Provide a field to change.');
     const actor = res.locals.actor as Actor;
-    await withTransaction(pool, async client => {
+    await withMutation(pool,req,actor,async client => {
       const row = await client.query('SELECT id,display_name,role,active FROM orderflow.users WHERE id=$1 FOR UPDATE', [id]);
       if (!row.rowCount) throw new AppError(404, 'NOT_FOUND', 'User not found.');
       const current = row.rows[0];
@@ -200,7 +201,7 @@ export function authRoutes(pool: pg.Pool, config: Config): Router {
     const input = z.object({ warehouseIds: z.array(idInput).max(200) }).strict().parse(req.body);
     const ids = [...new Set(input.warehouseIds)];
     const actor = res.locals.actor as Actor;
-    await withTransaction(pool, async client => {
+    await withMutation(pool,req,actor,async client => {
       const user = await client.query('SELECT id FROM orderflow.users WHERE id=$1 FOR UPDATE', [id]);
       if (!user.rowCount) throw new AppError(404, 'NOT_FOUND', 'User not found.');
       await client.query('DELETE FROM orderflow.user_warehouses WHERE user_id=$1', [id]);
