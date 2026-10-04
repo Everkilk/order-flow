@@ -120,7 +120,7 @@ dialog.drawer::backdrop { background: #10283b8c; }
 .sidebar-footer { flex-direction: column; align-items: stretch; }
 .account-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .account-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.button.sign-out-button { margin-left: 0; align-self: flex-start; background: #b42332; border-color: #b42332; color: white; }
+.button.sign-out-button { margin-left: 0; width: 100%; align-self: stretch; background: #b42332; border-color: #b42332; color: white; }
 .button.sign-out-button:hover { background: #8e1926; color: white; }
 .product-reference { display: inline-flex; flex-direction: column; overflow-wrap: anywhere; }
 .product-reference small { font-weight: 400; color: #62758a; }

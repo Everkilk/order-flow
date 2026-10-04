@@ -192,7 +192,7 @@ File-picker chrome and other native browser/OS controls may use the browser/OS l
 
 ### Work
 
-- Layout: avatar and account name/translated role on one row; sign-out icon button on the next row, left aligned.
+- Layout: avatar and account name/translated role on one row; sign-out icon button on the next row, spanning the account section width with the icon centered (user's 5 October follow-up).
 - Give the name the available width and allow long names to wrap without overlapping the avatar or button.
 - Use a red background, white sign-out icon, visible hover/focus/busy states and at least a 44 by 44 px target.
 - Keep the visible button icon-only. Provide translated tooltip and accessible name.
@@ -201,6 +201,7 @@ File-picker chrome and other native browser/OS controls may use the browser/OS l
 ### Acceptance and tests
 
 - Short/long English and Vietnamese names at desktop/tablet/390/320 widths: name readable, no overlap or clipping; correct role and button placement.
+- Sign-out button matches the account row's horizontal position/width; icon remains centered at all tested widths.
 - Verify contrast, Tab focus, Enter/Space activation, tooltip and accessible name.
 - Cancel sign-out with an unsaved form: session/form remain. Confirm: session ends and sign-in appears.
 - Test rapid activation and network failure; verify the authenticated state matches the actual result.
@@ -307,7 +308,7 @@ Deliver:
 
 ## 13. Implementation checklist
 
-- [ ] A: baseline and all coverage inventories recorded; defects reproduced; fixtures isolated.
+- [x] A: baseline and all coverage inventories recorded; defects reproduced; fixtures isolated.
 - [ ] R1: all inventoried forms aligned and verified across locales/viewports/states.
 - [ ] R2: searchable fulfilled orders, visible IDs, correct links and server validation verified.
 - [ ] R3: Pending creator-only deletion, history, physical cleanup, decision races and failure recovery verified.
@@ -315,7 +316,7 @@ Deliver:
 - [ ] R5: all useful product references identify/link the correct permitted product; navigation verified.
 - [ ] R6: app-controlled Vietnamese coverage complete across roles/routes/states; user data unchanged.
 - [ ] R7: footer layout, red icon button, accessibility, unsaved guards and real sign-out verified.
-- [ ] D: frontend lint/build/e2e and complete backend tests pass; real local integration, migration and reconciliation evidence recorded.
-- [ ] E: diff reviewed, scoped commits pushed by user, current $0 capacity checked, backend/schema then frontend published and revisions verified.
+- [x] D: frontend lint/build/e2e and complete backend tests pass; real local integration, migration and reconciliation evidence recorded.
+- [x] E: diff reviewed, scoped commits pushed by user, current $0 capacity checked, backend/schema then frontend published and revisions verified.
 - [ ] F: bounded live checks and cleanup completed; evidence/history/storage and inventory results reconciled.
 - [ ] Final: deliverables present; every requirement has authoritative completion evidence; no material gap remains.
