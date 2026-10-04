@@ -1,9 +1,11 @@
+import { SubmissionRecovery } from './components/SubmissionRecovery'
+import { MutationForm } from './components/MutationForm'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createBrowserRouter, createRoutesFromElements, Navigate, NavLink, Outlet, Route, RouterProvider, useNavigate, useParams } from 'react-router-dom'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { SessionProvider } from './app/session'
 import { useSession } from './app/session-context'
-import { Card, Loading, Notice } from './components/ui'
+import { ActionButton, Card, Loading, Notice } from './components/ui'
 import { Dashboard } from './features/dashboard'
 import { Products, ProductDetail } from './features/products'
 import { Stock, Movements } from './features/stock'
@@ -37,7 +39,7 @@ function Login() {
     event.preventDefault(); setBusy(true); setError(undefined)
     try { await login(email, password) } catch (e) { setError(e) } finally { setBusy(false) }
   }
-  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><div className="brand auth-brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><h1>{t('Welcome back')}</h1><p>{t('Sign in to manage your warehouse.')}</p><form onSubmit={submit}><label className="field"><span>{t('Email')}</span><input type="email" required autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} /></label><label className="field"><span>{t('Password')}</span><input type="password" required autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label><Notice error={error} success={passwordChanged ? 'Password changed. Please sign in again.' : undefined} /><button className="button primary full" disabled={busy}>{t(busy ? 'Signing in…' : 'Sign in')}</button></form></Card></div>
+  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><div className="brand auth-brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><h1>{t('Welcome back')}</h1><p>{t('Sign in to manage your warehouse.')}</p><MutationForm onSubmit={submit}><label className="field"><span>{t('Email')}</span><input type="email" required autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} /></label><label className="field"><span>{t('Password')}</span><input type="password" required autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label><Notice error={error} success={passwordChanged ? 'Password changed. Please sign in again.' : undefined} /><button className="button primary full" disabled={busy}>{t(busy ? 'Signing in…' : 'Sign in')}</button></MutationForm></Card></div>
 }
 
 function ChangePassword() {
@@ -54,11 +56,11 @@ function ChangePassword() {
       await refresh()
     } catch (e) { setError(e) }
   }
-  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><h1>{t('Change password')}</h1><p>{t('Your new password must have at least 12 characters.')}</p><form onSubmit={submit}><label className="field"><span>{t('Current password')}</span><input type="password" required value={currentPassword} onChange={event => setCurrent(event.target.value)} /></label><label className="field"><span>{t('New password')}</span><input type="password" minLength={12} required value={newPassword} onChange={event => setNext(event.target.value)} /></label><Notice error={error} /><button className="button primary full">{t('Change password')}</button></form></Card></div>
+  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><h1>{t('Change password')}</h1><p>{t('Your new password must have at least 12 characters.')}</p><MutationForm onSubmit={submit}><label className="field"><span>{t('Current password')}</span><input type="password" required value={currentPassword} onChange={event => setCurrent(event.target.value)} /></label><label className="field"><span>{t('New password')}</span><input type="password" minLength={12} required value={newPassword} onChange={event => setNext(event.target.value)} /></label><Notice error={error} /><button className="button primary full">{t('Change password')}</button></MutationForm></Card></div>
 }
 
 function LocaleSelect() {
-  return <select className="locale-select" aria-label="Language" value={getLocale()} onChange={event => setLocale(event.target.value as 'en' | 'vi')}>
+  return <select className="locale-select" aria-label={t("Language")} value={getLocale()} onChange={event => { if (confirmDiscard()) setLocale(event.target.value as 'en' | 'vi') }}>
     <option value="en">English</option><option value="vi">Tiếng Việt</option>
   </select>
 }
@@ -81,11 +83,12 @@ const nav: NavItem[] = [
 function Shell() {
   useUnsavedNavigation()
   const [signingOut, setSigningOut] = useState(false)
+  const [signOutError, setSignOutError] = useState<unknown>()
   const { user, logout } = useSession()
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
   if (!user) return null
-  return <div className="shell"><aside className={`sidebar ${menuOpen ? 'open' : ''}`}><button type="button" className="button icon-button menu-close" aria-label={t('Close menu')} onClick={() => setMenuOpen(false)}>×</button><div className="brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><div className="nav-label">WORKSPACE</div><nav aria-label="Main navigation">{nav.filter(item => !item.roles || item.roles.includes(user.role)).map(item => <NavLink key={item.to} end={item.to === '/'} to={item.to} onClick={() => setMenuOpen(false)} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>{t(item.label)}</NavLink>)}</nav><div className="sidebar-footer"><span className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div className="account-name"><strong>{user.displayName}</strong><small>{user.role.toLowerCase()}</small></div><button type="button" className="button icon-button sign-out-button" aria-label={t('Sign out')} title={t('Sign out')} disabled={signingOut} onClick={async () => { if (signingOut || !confirmDiscard()) return; setSigningOut(true); try { await logout() } finally { navigate('/'); setSigningOut(false) } }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 5H4v14h5M14 8l4 4-4 4M8 12h10" /></svg></button></div></aside><div className="main-area"><header className="topbar"><button type="button" className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">☰</button><span className="topbar-title">{t('Warehouse management')}</span><div className="top-actions"><LocaleSelect /><NotificationCount /></div></header><NavigationTrail /><main><Outlet /></main></div></div>
+  return <div className="shell"><aside className={`sidebar ${menuOpen ? 'open' : ''}`}><button type="button" className="button icon-button menu-close" aria-label={t('Close menu')} onClick={() => setMenuOpen(false)}>×</button><div className="brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><div className="nav-label">{t("WORKSPACE")}</div><nav aria-label={t("Main navigation")}>{nav.filter(item => !item.roles || item.roles.includes(user.role)).map(item => <NavLink key={item.to} end={item.to === '/'} to={item.to} onClick={() => setMenuOpen(false)} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>{t(item.label)}</NavLink>)}</nav><div className="sidebar-footer"><div className="account-row"><span className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</span><div className="account-name"><strong>{user.displayName}</strong><small>{t(user.role)}</small></div></div><ActionButton className="button icon-button sign-out-button" aria-label={t('Sign out')} title={t('Sign out')} disabled={signingOut} onClick={async () => { if (signingOut || !confirmDiscard()) return; setSigningOut(true); setSignOutError(undefined); try { await logout(); navigate('/') } catch (error) { setSignOutError(error) } finally { setSigningOut(false) } }}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 5H4v14h5M14 8l4 4-4 4M8 12h10" /></svg></ActionButton></div></aside><div className="main-area"><header className="topbar"><button type="button" className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label={t("Toggle menu")}>☰</button><span className="topbar-title">{t('Warehouse management')}</span><div className="top-actions"><LocaleSelect /><NotificationCount /></div></header><NavigationTrail /><main><SubmissionRecovery /><Notice error={signOutError} /><Outlet /></main></div></div>
 }
 
 function AuthGate({ children, roles }: { children: ReactNode; roles?: string[] }) {

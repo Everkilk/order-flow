@@ -8,7 +8,7 @@ type ProductOption = { id: string; sku: string; name: string; active?: boolean }
 
 export function ProductPicker({ value, onChange, label = 'Product', selectedLabel }: {
   value: string
-  onChange: (id: string) => void
+  onChange: (id: string, product?: ProductOption) => void
   label?: string
   selectedLabel?: string
 }) {
@@ -29,9 +29,9 @@ export function ProductPicker({ value, onChange, label = 'Product', selectedLabe
       <input type="search" value={search} placeholder={t('SKU or product name')} onChange={event => { setSearch(event.target.value); onChange('') }} />
     </Field>
     <Field label={label}>
-      <select required value={value} onChange={event => onChange(event.target.value)}>
+      <select required value={value} onChange={event => onChange(event.target.value, options.find(row => row.id === event.target.value))}>
         <option value="">{t(query.isFetching ? 'Searching…' : 'Choose product')}</option>
-        {value && !selected && <option value={value}>{selectedLabel ?? `Product #${value}`}</option>}
+        {value && !selected && <option value={value}>{selectedLabel ?? t('Product #{id}', { id: value })}</option>}
         {options.map(row => <option key={row.id} value={row.id}>{row.sku} — {row.name}</option>)}
       </select>
     </Field>

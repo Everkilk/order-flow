@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom'
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { withSubmissionContext, type SubmissionContext } from '../lib/api'
 import { messageOf } from '../lib/api'
-import { t } from '../app/locale'
+import { t, errorText } from '../app/locale'
 
-export function PageHeading({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
-  return <div className="page-heading"><div><h1>{t(title)}</h1>{description && <p>{t(description)}</p>}</div>{action}</div>
+export function PageHeading({ title, description, action, translateTitle = true }: { title: string; description?: string; action?: ReactNode; translateTitle?: boolean }) {
+  return <div className="page-heading"><div><h1>{translateTitle ? t(title) : title}</h1>{description && <p>{t(description)}</p>}</div>{action}</div>
 }
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
@@ -39,7 +40,7 @@ export function Drawer({ title, children }: { title: string; children: ReactNode
 }
 
 export function Notice({ error, success }: { error?: unknown; success?: string }) {
-  if (error) return <div className="notice error" role="alert">{t(messageOf(error))}</div>
+  if (error) return <div className="notice error" role="alert">{errorText(messageOf(error))}</div>
   if (success) return <div className="notice success" role="status">{t(success)}</div>
   return null
 }
@@ -48,9 +49,9 @@ export function Loading() { return <div className="state">{t('Loading…')}</div
 export function Empty({ text = 'No records found.' }: { text?: string }) { return <div className="state">{t(text)}</div> }
 export function Badge({ value }: { value?: string | null }) { return <span className={`badge badge-${(value ?? '').toLowerCase()}`}>{value ? t(value) : '—'}</span> }
 
-export function DataTable({ headers, rows }: { headers: string[]; rows: ReactNode[][] }) {
+export function DataTable({ headers, rows, translateHeaders = true }: { headers: string[]; rows: ReactNode[][]; translateHeaders?: boolean }) {
   if (!rows.length) return <Empty />
-  return <div className="table-scroll"><table><thead><tr>{headers.map(header => <th key={header}>{t(header)}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{typeof cell === 'string' ? t(cell) : cell}</td>)}</tr>)}</tbody></table></div>
+  return <div className="table-scroll"><table><thead><tr>{headers.map(header => <th key={header}>{translateHeaders ? t(header) : header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{cell}</td>)}</tr>)}</tbody></table></div>
 }
 
 export function Pager({ next, previous, onNext, onPrevious }: { next: string | null; previous: boolean; onNext: () => void; onPrevious: () => void }) {
@@ -59,8 +60,32 @@ export function Pager({ next, previous, onNext, onPrevious }: { next: string | n
 
 export function RecordLink({ to, children }: { to: string; children: ReactNode }) { return <Link className="record-link" to={to}>{children}</Link> }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="field"><span>{t(label)}</span>{children}</label> }
+export function ActionButton({ onClick, children, disabled, ...props }: Omit<ComponentProps<'button'>, 'onClick'> & { onClick: () => unknown }) {
+  const locked = useRef(false)
+  const context = useRef<SubmissionContext>({})
+  const [busy, setBusy] = useState(false)
+  return <button {...props} type="button" aria-busy={busy} disabled={disabled || busy} onClick={async () => {
+    if (locked.current) return
+    locked.current = true; setBusy(true)
+    try { await withSubmissionContext(context.current, onClick) } finally { locked.current = false; setBusy(false) }
+  }}>{busy && !props.className?.includes('icon-button') ? t('Processing…') : children}</button>
+}
 
-export function Confirm({ message, onConfirm, disabled, children }: { message: string; onConfirm: () => void; disabled?: boolean; children: ReactNode }) {
-  return <button type="button" className="button" disabled={disabled} onClick={() => { if (window.confirm(t(message))) onConfirm() }}>{typeof children === 'string' ? t(children) : children}</button>
+export function Field({ label, children, translateLabel = true }: { label: string; children: ReactNode; translateLabel?: boolean }) {
+  const labelId = useId()
+  return <label className="field"><span id={labelId}>{translateLabel ? t(label) : label}</span>{Children.map(children, child => {
+    if (!isValidElement<{ 'aria-labelledby'?: string }>(child) || (typeof child.type !== 'function' && !['input', 'select', 'textarea'].includes(String(child.type)))) return child
+    return cloneElement(child, { 'aria-labelledby': child.props['aria-labelledby'] ?? labelId })
+  })}</label>
+}
+
+export function Confirm({ message, onConfirm, disabled, children }: { message: string; onConfirm: () => unknown; disabled?: boolean; children: ReactNode }) {
+  const locked = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const context = useRef<SubmissionContext>({})
+  return <button type="button" className="button" disabled={disabled || busy} onClick={async () => {
+    if (locked.current || !window.confirm(t(message))) return
+    locked.current = true; setBusy(true)
+    try { await withSubmissionContext(context.current, onConfirm) } finally { locked.current = false; setBusy(false) }
+  }}>{busy ? t('Processing…') : typeof children === 'string' ? t(children) : children}</button>
 }

@@ -1,3 +1,4 @@
+import { errorTranslations } from './error-translations'
 export type Locale = 'en' | 'vi'
 
 const vietnamese: Record<string, string> = {
@@ -8,6 +9,7 @@ const vietnamese: Record<string, string> = {
   'Mark all as read': 'Đánh dấu tất cả đã đọc', 'Marking as read…': 'Đang đánh dấu đã đọc…',
   'All notifications marked as read.': 'Đã đánh dấu tất cả thông báo là đã đọc.',
   'Upload received.': 'Đã nhận tệp tải lên.',
+  'The change was saved, but the page could not refresh. Reload to see the latest data.': 'Đã lưu thay đổi, nhưng không thể làm mới trang. Hãy tải lại để xem dữ liệu mới nhất.',
   'Export failed. Request a new export.': 'Xuất dữ liệu thất bại. Hãy yêu cầu xuất lại.',
   'Overview': 'Tổng quan', 'Products': 'Sản phẩm', 'Stock': 'Tồn kho',
   'Receipts': 'Phiếu nhập', 'Orders': 'Đơn hàng', 'Returns': 'Hàng trả',
@@ -171,6 +173,109 @@ export function setLocale(locale: Locale) {
   window.location.reload()
 }
 
-export function t(text: string): string {
-  return getLocale() === 'vi' ? vietnamese[text] ?? text : text
+Object.assign(vietnamese, {
+  'An earlier submission has an unconfirmed result. Check it before submitting again.': 'Chưa xác nhận được kết quả lần gửi trước. Hãy kiểm tra trước khi gửi lại.',
+  'Previous submission completed. Review it before making another change.': 'Lần gửi trước đã hoàn tất. Hãy kiểm tra trước khi thực hiện thay đổi khác.',
+  'Check previous submission': 'Kiểm tra lần gửi trước',
+  'The result is still unconfirmed. Return to the form and retry the same values within 24 hours.': 'Vẫn chưa xác nhận được kết quả. Hãy quay lại biểu mẫu và gửi lại các giá trị cũ trong vòng 24 giờ.',
+  'Stock request #{id}': 'Yêu cầu tồn kho #{id}', 'Product #{id}': 'Sản phẩm #{id}',
+  'The selected order is not fulfilled. Choose a fulfilled order.': 'Đơn hàng đã chọn chưa hoàn tất. Hãy chọn đơn hàng đã hoàn tất.',
+  'Low stock: {sku}': 'Sắp hết hàng: {sku}', '{amount} available in {warehouse}.': 'Có thể dùng {amount} tại {warehouse}.',
+  'Order assigned': 'Đơn hàng được giao', 'Order ready for fulfillment': 'Đơn hàng sẵn sàng hoàn tất', 'Order cancelled': 'Đơn hàng đã hủy',
+  'Order {document} is assigned to you.': 'Đơn hàng {document} được giao cho bạn.', 'Order {document} is {status}.': 'Đơn hàng {document}: {status}.',
+  'Transfer awaiting receipt': 'Phiếu chuyển đang chờ nhận', 'Transfer received': 'Đã nhận hàng chuyển',
+  'Transfer {document} is ready to receive.': 'Phiếu chuyển {document} đã sẵn sàng nhận hàng.', 'Transfer #{id} is now {status}.': 'Phiếu chuyển #{id}: {status}.',
+  'Transfer excess needs review': 'Hàng chuyển dư cần rà soát', 'Transfer shortage needs review': 'Hàng chuyển thiếu cần rà soát',
+  'Transfer #{id} has quarantined excess stock.': 'Phiếu chuyển #{id} có hàng dư đang cách ly.', 'Transfer #{id} has a reported shortage.': 'Phiếu chuyển #{id} đã báo thiếu hàng.',
+  'Stock change needs review': 'Điều chỉnh tồn kho cần rà soát', '{type} request #{id} is ready for review.': 'Yêu cầu {type} #{id} đã sẵn sàng rà soát.',
+  'Stock request approved': 'Yêu cầu tồn kho đã được duyệt', 'Stock request rejected': 'Yêu cầu tồn kho bị từ chối',
+  'Stock request #{id} was {status}.': 'Yêu cầu tồn kho #{id}: {status}.',
+  'Import validation complete': 'Đã kiểm tra dữ liệu nhập', 'Import committed': 'Đã ghi dữ liệu nhập', 'Imported {count} rows.': 'Đã nhập {count} dòng.',
+  'Import is ready to commit.': 'Dữ liệu nhập đã sẵn sàng ghi.', 'Import has validation errors.': 'Dữ liệu nhập có lỗi kiểm tra.',
+  'Export ready': 'Dữ liệu xuất đã sẵn sàng', 'Your CSV export is ready to download.': 'Tệp CSV xuất đã sẵn sàng tải xuống.',
+  'Import failed': 'Nhập dữ liệu thất bại', 'Export failed': 'Xuất dữ liệu thất bại',
+  'The import could not be completed. Review its status.': 'Không thể hoàn thành nhập dữ liệu. Hãy kiểm tra trạng thái.',
+  'The export could not be completed. Review its status.': 'Không thể hoàn thành xuất dữ liệu. Hãy kiểm tra trạng thái.',
+  'Add category': 'Thêm danh mục', 'Add unit': 'Thêm đơn vị', 'Add supplier': 'Thêm nhà cung cấp', 'Add warehouse': 'Thêm kho',
+  'string': 'Văn bản', 'number': 'Số', 'boolean': 'Có / không', 'DEAD': 'Thất bại', 'OPEN': 'Chưa xử lý',
+  'Document number or Order ID': 'Số chứng từ hoặc ID đơn hàng',
+  'Search products': 'Tìm sản phẩm', 'Manage {name}': 'Quản lý {name}',
+  'Deletion history': 'Lịch sử xóa', 'File': 'Tệp', 'Deleted by': 'Người xóa',
+  'Deleted at': 'Thời điểm xóa', 'Storage cleanup': 'Dọn tệp lưu trữ',
+  'Cleanup failed; an administrator must review it.': 'Dọn tệp thất bại; quản trị viên cần kiểm tra.',
+  'Order': 'Đơn hàng', 'Receipt': 'Phiếu nhập', 'Return': 'Phiếu trả', 'Transfer': 'Phiếu chuyển',
+  'New receipt': 'Tạo phiếu nhập', 'New order': 'Tạo đơn hàng', 'New return': 'Tạo phiếu trả', 'New transfer': 'Tạo phiếu chuyển',
+  'Create and track warehouse receipts.': 'Tạo và theo dõi phiếu nhập kho.',
+  'Create and track warehouse orders.': 'Tạo và theo dõi đơn hàng.',
+  'Create and track warehouse transfers.': 'Tạo và theo dõi phiếu chuyển kho.',
+  'Returned goods from fulfilled orders.': 'Hàng trả từ các đơn hàng đã hoàn tất.',
+  'Post receipt': 'Ghi phiếu nhập vào kho', 'Post return': 'Ghi phiếu trả vào kho',
+  'Order ID': 'ID đơn hàng', 'Search fulfilled orders': 'Tìm đơn hàng đã hoàn tất',
+  'Document number or exact Order ID': 'Số chứng từ hoặc ID đơn hàng chính xác',
+  'Fulfilled order': 'Đơn hàng đã hoàn tất', 'Choose fulfilled order': 'Chọn đơn hàng đã hoàn tất',
+  'WORKSPACE': 'KHÔNG GIAN LÀM VIỆC', 'Language': 'Ngôn ngữ', 'Main navigation': 'Điều hướng chính', 'Toggle menu': 'Mở hoặc đóng menu',
+  'DAMAGE': 'Hư hỏng', 'LOSS': 'Mất hàng', 'COUNT': 'Kiểm kê', 'REVERSAL': 'Đảo giao dịch',
+  'INBOUND': 'Nhập hàng', 'OPENING': 'Tồn đầu kỳ', 'RECEIPT': 'Nhập kho', 'ADJUSTMENT': 'Điều chỉnh',
+  'ORDER_CONFIRM': 'Xác nhận đơn hàng', 'ORDER_CANCEL': 'Hủy đơn hàng', 'ORDER_FULFILL': 'Hoàn tất đơn hàng', 'ORDER_RETURN': 'Trả hàng',
+  'TRANSFER_SEND': 'Xuất chuyển kho', 'TRANSFER_RECEIVE': 'Nhận chuyển kho', 'TRANSFER_RESOLUTION': 'Xử lý sai lệch chuyển kho',
+  'SHORTAGE': 'Thiếu hàng', 'EXCESS': 'Dư hàng', 'ACCEPT_EXCESS': 'Nhận hàng dư', 'RETURN_EXCESS': 'Trả hàng dư',
+  'DISPATCH_CORRECTION': 'Sửa số lượng xuất chuyển', 'LATER_RECEIPT': 'Nhận bổ sung',
+  'PRODUCTS': 'Sản phẩm', 'STOCK': 'Tồn kho', 'MOVEMENTS': 'Biến động kho', 'REPORT': 'Báo cáo',
+  'OPENING_STOCK': 'Tồn đầu kỳ', 'ORDERS': 'Đơn hàng', 'AVAILABLE': 'Có hàng', 'OUT_OF_STOCK': 'Hết hàng',
+  'Accept': 'Số lượng nhận', 'Quarantine excess': 'Cách ly hàng dư', 'Excess reason': 'Lý do dư hàng',
+  'Outstanding': 'Chưa xử lý', 'Returnable': 'Có thể trả', 'Resolution': 'Cách xử lý', 'Later receipt item ID': 'ID dòng nhận bổ sung',
+  'Current on hand': 'Tồn kho hiện tại', 'Version': 'Phiên bản', 'Supplier (optional)': 'Nhà cung cấp (tùy chọn)',
+  'Delete': 'Xóa', 'Delete evidence {filename}?': 'Xóa minh chứng {filename}?',
+  'Evidence deleted.': 'Đã xóa minh chứng.', 'Evidence is locked after a decision.': 'Minh chứng đã được khóa sau khi có quyết định.',
+  'Evidence must be 5 MB or smaller.': 'Minh chứng phải có dung lượng tối đa 5 MB.',
+  'CSV must be at most 20 MB.': 'Tệp CSV phải có dung lượng tối đa 20 MB.',
+  'CSV file': 'Tệp CSV', 'Data': 'Dữ liệu', 'Data type': 'Loại dữ liệu', 'Image URL': 'Đường dẫn ảnh',
+  'Selling price': 'Giá bán', 'Problem': 'Vấn đề', 'Field': 'Trường', 'Row': 'Dòng', 'Tab': 'Thẻ', 'Add': 'Thêm',
+  'Attribute added.': 'Đã thêm thuộc tính.', 'Created successfully.': 'Đã tạo thành công.',
+  'Low-stock threshold saved.': 'Đã lưu ngưỡng tồn kho thấp.', 'Supplier saved.': 'Đã lưu nhà cung cấp.',
+  'Export queued.': 'Đã xếp hàng xuất dữ liệu.', 'Import queued for commit.': 'Đã xếp hàng ghi dữ liệu nhập.',
+  'User updated.': 'Đã cập nhật người dùng.', 'Warehouse access updated.': 'Đã cập nhật quyền truy cập kho.',
+  'User created. Assign warehouses before they start work.': 'Đã tạo người dùng. Hãy giao kho trước khi họ bắt đầu làm việc.',
+  'Temporary password set. Share it privately with the user.': 'Đã đặt mật khẩu tạm. Hãy gửi riêng cho người dùng.',
+  'Cancel this order?': 'Hủy đơn hàng này?',
+  'Cancel this order and release reserved stock?': 'Hủy đơn hàng này và giải phóng hàng đã giữ?',
+  'Confirm this order and reserve stock?': 'Xác nhận đơn hàng này và giữ hàng?',
+  'Fulfill this order and deduct inventory?': 'Hoàn tất đơn hàng này và trừ tồn kho?',
+  'Dispatch this transfer and remove stock from the source?': 'Xuất phiếu chuyển này và trừ tồn kho tại kho nguồn?',
+  'Post this document to inventory?': 'Ghi chứng từ này vào tồn kho?', 'Commit all validated rows?': 'Ghi tất cả các dòng đã kiểm tra?',
+  'Rows without a primary supplier cost': 'Dòng chưa có giá nhà cung cấp chính', 'Job error': 'Lỗi tác vụ',
+  'The previous submission may have succeeded. Retry it before changing the form.': 'Lần gửi trước có thể đã thành công. Hãy gửi lại lần đó trước khi thay đổi biểu mẫu.',
+})
+
+export function dateText(value: string, withTime = true): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const locale = getLocale() === 'vi' ? 'vi-VN' : 'en-US'
+  return withTime ? date.toLocaleString(locale) : date.toLocaleDateString(locale)
+}
+
+export function t(text: string, values: Record<string, string | number> = {}): string {
+  const translated = getLocale() === 'vi' ? vietnamese[text] ?? errorTranslations[text] ?? text : text
+  return translated.replace(/\{([a-zA-Z]+)\}/g, (match, key: string) => Object.hasOwn(values, key) ? String(values[key]) : match)
+}
+
+export function errorText(text: string): string {
+  if (getLocale() === 'en') return text
+  const translated = t(text)
+  if (translated !== text) return translated
+  const rules: [RegExp, (match: RegExpMatchArray) => string][] = [
+    [/^CSV header must be: (.*)$/s, match => `Tiêu đề CSV phải là: ${match[1]}`],
+    [/^Unknown attribute: (.*)\.$/s, match => `Thuộc tính không được định nghĩa: ${match[1]}.`],
+    [/^Required attribute missing: (.*)\.$/s, match => `Thiếu thuộc tính bắt buộc: ${match[1]}.`],
+    [/^Invalid value for (.*)\.$/s, match => `Giá trị không hợp lệ cho ${match[1]}.`],
+    [/^(.*) is below its minimum\.$/s, match => `${match[1]} nhỏ hơn giá trị tối thiểu.`],
+    [/^(.*) exceeds its maximum\.$/s, match => `${match[1]} vượt quá giá trị tối đa.`],
+    [/^(.*) is not an allowed value\.$/s, match => `${match[1]} không thuộc các giá trị cho phép.`],
+    [/^Invalid input: expected (.*), received (.*)$/s, () => 'Kiểu dữ liệu không hợp lệ.'],
+    [/^Too small:.*>=([0-9]+).*$/s, match => `Giá trị quá nhỏ; yêu cầu tối thiểu ${match[1]}.`],
+    [/^Too big:.*<=([0-9]+).*$/s, match => `Giá trị quá lớn; yêu cầu tối đa ${match[1]}.`],
+    [/^Invalid (?:string|input|option|format).*$/s, () => 'Giá trị không đúng định dạng hoặc lựa chọn cho phép.'],
+  ]
+  for (const [pattern, render] of rules) { const match = text.match(pattern); if (match) return render(match) }
+  return 'Không thể thực hiện yêu cầu. Hãy kiểm tra dữ liệu và thử lại.'
 }

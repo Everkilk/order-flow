@@ -1,14 +1,22 @@
+import { dateText } from '../app/locale'
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Card, DataTable, Loading, Notice, PageHeading, Pager } from '../components/ui'
+import { ActionButton, Card, DataTable, Loading, Notice, PageHeading, Pager } from '../components/ui'
 import { api, json } from '../lib/api'
 import { usePage } from '../lib/queries'
 import { useSession } from '../app/session-context'
 import { t } from '../app/locale'
-import { notificationBody } from '../lib/numbers'
+import { decimalText, notificationBody } from '../lib/numbers'
 
-type Notification = { id: string; eventClass?: string; title: string; body: string; targetPath: string; createdAt: string; readAt: string | null }
+type Notification = { id: string; eventClass?: string; title: string; body: string; targetPath: string; createdAt: string; readAt: string | null; titleKey?: string; titleValues?: Record<string,string>; messageKey?: string; messageValues?: Record<string,string> }
+
+function translatedBody(row:Notification) {
+  const values={...row.messageValues}
+  if(values.amount) values.amount=decimalText(values.amount)
+  for(const key of ['status','type']) if(values[key]) values[key]=t(values[key].toUpperCase())
+  return row.messageKey ? t(row.messageKey,values) : t(notificationBody(row.eventClass,row.body))
+}
 
 function useLiveNotifications() {
   const { user } = useSession()
@@ -55,5 +63,5 @@ export function Notifications() {
       if (id === 'all') setSuccess('All notifications marked as read.')
     } catch (e) { setError(e) } finally { setBusy(null) }
   }
-  return <><PageHeading title="Notifications" description="Recent updates and tasks assigned to you." action={<button className="button subtle" disabled={busy !== null || !unread.data?.count} onClick={() => void markRead('all')}>{t(busy === 'all' ? 'Marking as read…' : 'Mark all as read')}</button>} /><Notice error={error} success={success} /><Card>{query.isPending ? <Loading /> : query.error ? <Notice error={query.error} /> : <DataTable headers={['Update', 'When', 'Status']} rows={query.data.items.map(row => [<div><strong>{row.title}</strong><p>{notificationBody(row.eventClass, row.body)}</p>{row.targetPath.startsWith('/') && !row.targetPath.startsWith('//') && <Link to={row.targetPath} onClick={() => { if (!row.readAt) void markRead(row.id) }}>{t('Open record →')}</Link>}</div>, new Date(row.createdAt).toLocaleString(), row.readAt ? t('Read') : <button className="button subtle" disabled={busy !== null} onClick={() => void markRead(row.id)}>{t('Mark read')}</button>])} />}<Pager next={query.next} previous={query.previous} onNext={query.forward} onPrevious={query.back} /></Card></>
+  return <><PageHeading title="Notifications" description="Recent updates and tasks assigned to you." action={<ActionButton className="button subtle" disabled={busy !== null || !unread.data?.count} onClick={() => markRead('all')}>{t(busy === 'all' ? 'Marking as read…' : 'Mark all as read')}</ActionButton>} /><Notice error={error} success={success} /><Card>{query.isPending ? <Loading /> : query.error ? <Notice error={query.error} /> : <DataTable headers={['Update', 'When', 'Status']} rows={query.data.items.map(row => [<div><strong>{t(row.titleKey ?? row.title,row.titleValues)}</strong><p>{translatedBody(row)}</p>{row.targetPath.startsWith('/') && !row.targetPath.startsWith('//') && <Link to={row.targetPath} onClick={() => { if (!row.readAt) void markRead(row.id) }}>{t('Open record →')}</Link>}</div>, dateText(row.createdAt), row.readAt ? t('Read') : <ActionButton className="button subtle" disabled={busy !== null} onClick={() => markRead(row.id)}>{t('Mark read')}</ActionButton>])} />}<Pager next={query.next} previous={query.previous} onNext={query.forward} onPrevious={query.back} /></Card></>
 }

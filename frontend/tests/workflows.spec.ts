@@ -8,6 +8,255 @@ async function signIn(page: Page) {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
 }
 
+for (const width of [1440, 1024, 390, 320]) for (const locale of ['en','vi']) {
+  test(`all document field grids align at ${width}px in ${locale}`, async({page})=>{
+    test.setTimeout(60_000)
+    await page.setViewportSize({width,height:1000})
+    page.on('dialog',dialog=>dialog.accept())
+    await page.addInitScript(locale=>localStorage.setItem('orderflow.locale',locale),locale)
+    await mockSession(page,'MANAGER','Demo Staff / Nhân viên mẫu có tên dài để kiểm tra bố cục')
+    const line={id:'22',productId:'9',sku:'HAMMER-001',name:'Hammer with a long descriptive product name for layout testing',warehouseId:'1',orderItemId:'22',quantity:'1',unitCost:'2',unitPrice:'3',currency:'USD',requestedQty:'1',returnableQty:'1',inTransitQty:'1',receivedQty:'0',quarantinedQty:'0'}
+    await page.route(/\/api\/(receipts|orders|returns|transfers)\//,route=>{
+      const path=new URL(route.request().url()).pathname
+      if(path.endsWith('/discrepancies'))return route.fulfill({json:{items:[{id:'51',transferItemId:'22',productId:'9',sku:line.sku,name:line.name,kind:'EXCESS',reportedQty:'1',outstandingQty:'1',status:'OPEN',reason:'Layout fixture'}]}})
+      const kind=path.split('/')[2],numberKey={receipts:'receiptNumber',orders:'orderNumber',returns:'returnNumber',transfers:'transferNumber'}[kind]!
+      return route.fulfill({json:{id:path.endsWith('/21')?'21':path.endsWith('/2')?'2':'1',[numberKey]:'LAYOUT-'+kind,status:path.endsWith('/21')?'FULFILLED':path.endsWith('/2')?'SENT':'DRAFT',revision:0,...(kind==='receipts'||kind==='returns'?{warehouseId:'1'}:{}),...(kind==='returns'?{orderId:'21'}:{}),...(kind==='transfers'?{sourceWarehouseId:'1',destinationWarehouseId:'1'}:{}),items:[line]}})
+    })
+    await page.goto('/')
+    await page.getByLabel(locale==='en'?'Email':'Email',{exact:true}).fill('manager@example.com')
+    await page.getByLabel(locale==='en'?'Password':'Mật khẩu',{exact:true}).fill('example-password')
+    await page.getByRole('button',{name:locale==='en'?'Sign in':'Đăng nhập',exact:true}).click()
+    const output=join('..','docs','qa-2026-10-04','layouts');await mkdir(output,{recursive:true})
+    for(const kind of ['receipts','orders','returns','transfers']) {
+      await page.goto('/'+kind+'/1');await page.locator('.line-editor').waitFor()
+      const controls=page.locator('.line-editor > .field input, .line-editor > .field select')
+      const boxes=await controls.evaluateAll(elements=>elements.map(element=>{const box=element.getBoundingClientRect();return {y:box.y,height:box.height}}))
+      if(width>740&&boxes.length>=2){expect(Math.abs(boxes[0].y-boxes[1].y)).toBeLessThan(1);expect(Math.abs(boxes[0].height-boxes[1].height)).toBeLessThan(1)}
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width+1)
+      await page.screenshot({path:join(output,`${kind}-${width}-${locale}.png`),fullPage:true})
+      if(width===1440||width===320) {
+        await page.getByRole('button',{name:locale==='en'?'Add line':'Thêm dòng'}).click()
+        await expect(page.locator('.line-editor')).toHaveCount(2)
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width+1)
+      }
+    }
+    await page.goto('/transfers/2');await page.locator('.line-editor').waitFor()
+    const receiving=page.locator('.line-editor input');const boxes=await receiving.evaluateAll(elements=>elements.map(element=>element.getBoundingClientRect().y))
+    if(width>740)expect(Math.abs(boxes[0]-boxes[1])).toBeLessThan(1)
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width+1)
+    await page.screenshot({path:join(output,`receiving-discrepancy-${width}-${locale}.png`),fullPage:true})
+    if(width<741) {
+      await page.getByRole('button',{name:locale==='en'?'Toggle menu':'Mở hoặc đóng menu'}).click()
+      await expect(page.locator('.sidebar')).toHaveCSS('transform','matrix(1, 0, 0, 1, 0, 0)')
+    }
+    const account=await page.locator('.account-row').boundingBox(),signout=await page.getByRole('button',{name:locale==='en'?'Sign out':'Đăng xuất',exact:true}).boundingBox()
+    expect(account!.x).toBeGreaterThanOrEqual(0);expect(account!.x+account!.width).toBeLessThanOrEqual(width)
+    expect(signout!.x).toBeGreaterThanOrEqual(0);expect(signout!.y+signout!.height).toBeLessThanOrEqual(1000)
+    expect(signout!.y).toBeGreaterThanOrEqual(account!.y+account!.height)
+    expect(signout!.width).toBeGreaterThanOrEqual(44);expect(signout!.height).toBeGreaterThanOrEqual(44)
+    expect(await page.getByRole('button',{name:locale==='en'?'Sign out':'Đăng xuất',exact:true}).evaluate(element=>getComputedStyle(element).backgroundColor)).toBe('rgb(180, 35, 50)')
+    await page.screenshot({path:join(output,`account-${width}-${locale}.png`)})
+  })
+}
+
+for (const width of [1440,1024,390,320]) for(const locale of ['en','vi']) {
+  test(`remaining forms stay within ${width}px in ${locale}`,async({page})=>{
+    test.setTimeout(60_000)
+    await page.setViewportSize({width,height:1000});await page.addInitScript(locale=>localStorage.setItem('orderflow.locale',locale),locale);await mockSession(page)
+    await page.goto('/');await page.getByLabel('Email',{exact:true}).fill('manager@example.com');await page.getByLabel(locale==='en'?'Password':'Mật khẩu',{exact:true}).fill('example-password');await page.getByRole('button',{name:locale==='en'?'Sign in':'Đăng nhập',exact:true}).click()
+    const output=join('..','docs','qa-2026-10-04','layouts');await mkdir(output,{recursive:true})
+    for(const section of ['stock-requests','references','users','jobs','reports']) {
+      await page.goto('/'+section);await page.locator('main h1').waitFor()
+      if(section==='references')await page.getByRole('button',{name:locale==='en'?'Warehouses':'Kho',exact:true}).click()
+      await page.locator('main select').first().waitFor()
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width+1)
+      const controls=await page.locator('main .field input, main .field select, main .field textarea').evaluateAll(elements=>elements.map(element=>{const box=element.getBoundingClientRect();return {left:box.left,right:box.right}}))
+      expect(controls.length).toBeGreaterThan(0)
+      for(const box of controls){expect(box.left).toBeGreaterThanOrEqual(0);expect(box.right).toBeLessThanOrEqual(width+1)}
+      await page.screenshot({path:join(output,`${section}-${width}-${locale}.png`),fullPage:true})
+    }
+  })
+}
+
+test('return selector keeps internal ID distinct from reference and limits warehouses',async({page})=>{
+  await mockSession(page)
+  const seen:string[]=[];let submitted: { orderId?: string } | undefined
+  const order={id:'29',orderNumber:'DEMO-V2-ORD-25',status:'FULFILLED',revision:1,items:[{id:'81',productId:'9',sku:'HAMMER-001',name:'Hammer',warehouseId:'1',quantity:'2',returnableQty:'2'}]}
+  await page.route('**/api/orders**',route=>{
+    const url=new URL(route.request().url());seen.push(url.search)
+    return route.fulfill({json:url.pathname==='/api/orders/29'?order:{items:[order],nextCursor:null}})
+  })
+  await page.route('**/api/warehouses',route=>route.fulfill({json:{items:[{id:'1',code:'MAIN',name:'Main'},{id:'2',code:'OTHER',name:'Other'}]}}))
+  await page.route('**/api/returns**',route=>{
+    if(route.request().method()==='POST'){submitted=route.request().postDataJSON();return route.fulfill({status:201,json:{id:'7'}})}
+    return route.fulfill({json:new URL(route.request().url()).pathname==='/api/returns/7'?{id:'7',returnNumber:'QA-RETURN',orderId:'29',orderNumber:order.orderNumber,warehouseId:'1',status:'DRAFT',revision:0,items:[]}:{items:[],nextCursor:null}})
+  })
+  await page.goto('/orders/29');await signIn(page)
+  await expect(page.locator('.summary-row').filter({hasText:'Order ID'})).toContainText('29')
+  await page.getByRole('link',{name:'Create a return →'}).click()
+  const drawer=page.locator('.drawer')
+  await expect(drawer.getByLabel('Fulfilled order',{exact:true})).toHaveValue('29')
+  await expect(drawer.getByLabel('Warehouse',{exact:true}).locator('option[value="2"]')).toHaveCount(0)
+  await drawer.getByLabel('Search fulfilled orders').fill('29')
+  await expect.poll(()=>seen.some(query=>query.includes('q=29')&&query.includes('status=FULFILLED'))).toBe(true)
+  await drawer.getByLabel('Fulfilled order',{exact:true}).selectOption('29')
+  await expect(drawer.getByLabel('Fulfilled order',{exact:true}).locator('option:checked')).toHaveText('DEMO-V2-ORD-25 · Order ID: 29 · FULFILLED')
+  await drawer.getByLabel('Document number').fill('QA-RETURN')
+  await drawer.getByLabel('Warehouse',{exact:true}).selectOption('1')
+  await drawer.getByLabel('Reason').fill('Identity regression')
+  await drawer.getByRole('button',{name:'Create draft'}).click()
+  await expect(page).toHaveURL(/\/returns\/7$/)
+  expect(submitted?.orderId).toBe('29')
+  await expect(page.getByRole('link',{name:'DEMO-V2-ORD-25 · Order ID: 29'})).toHaveAttribute('href','/orders/29')
+})
+
+test('stock-request form locks immediately and reuses its key after a lost response',async({page})=>{
+  await mockSession(page)
+  const keys:string[]=[];let attempts=0
+  await page.route('**/api/stock-requests**',route=>{
+    if(route.request().method()==='POST'){
+      attempts++;keys.push(route.request().headers()['idempotency-key'])
+      return attempts===1?route.abort('failed'):route.fulfill({status:201,json:{id:'77'}})
+    }
+    return route.fulfill({json:new URL(route.request().url()).pathname==='/api/stock-requests/77'?{id:'77',requestType:'DAMAGE',warehouseId:'1',productId:'9',sku:'HAMMER-001',productName:'Hammer',reason:'Retry fixture',requestedDelta:'-1',decision:null}:{items:[],nextCursor:null}})
+  })
+  await page.goto('/stock-requests');await signIn(page)
+  await page.getByLabel('Warehouse',{exact:true}).selectOption('1')
+  await page.getByLabel('Product',{exact:true}).selectOption('9')
+  await page.getByLabel('Quantity to remove').fill('1');await page.getByLabel('Reason',{exact:true}).fill('Retry fixture')
+  await page.locator('form').evaluate((form:HTMLFormElement)=>{form.requestSubmit();form.requestSubmit()})
+  await expect(page.getByRole('alert')).toContainText('Connection failed')
+  expect(attempts).toBe(1)
+  const recovery = await page.evaluate(() => sessionStorage.getItem('orderflow.submission-recovery'))
+  expect(recovery).not.toContain('Retry fixture')
+  expect(recovery).not.toContain('example-password')
+  await page.getByLabel('Quantity to remove').fill('2')
+  await page.getByRole('button',{name:'Submit request'}).click()
+  await expect(page.getByRole('alert')).toContainText('previous submission may have succeeded')
+  expect(attempts).toBe(1)
+  page.once('dialog', dialog => dialog.accept())
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Check previous submission' })).toBeVisible()
+  await page.route('**/api/submissions/**',route=>route.fulfill({json:{state:'UNCONFIRMED',result:null}}))
+  await page.getByRole('button',{name:'Check previous submission'}).click()
+  await expect(page.getByText('The result is still unconfirmed. Return to the form and retry the same values within 24 hours.')).toBeVisible()
+  expect(attempts).toBe(1)
+  await page.getByLabel('Warehouse',{exact:true}).selectOption('1')
+  await page.getByLabel('Product',{exact:true}).selectOption('9')
+  await page.getByLabel('Reason',{exact:true}).fill('Retry fixture')
+  await page.getByLabel('Quantity to remove').fill('1')
+  await page.getByRole('button',{name:'Submit request'}).click()
+  await expect(page).toHaveURL(/\/stock-requests\/77$/)
+  expect(keys).toHaveLength(2);expect(keys[0]).toMatch(/^[a-f0-9-]{36}$/);expect(keys[1]).toBe(keys[0])
+})
+
+test('a committed submission can be recovered after reload without another write',async({page})=>{
+  await mockSession(page)
+  const key='11111111-2222-4333-8444-555555555555'
+  await page.route('**/api/submissions/**',route=>route.fulfill({json:{state:'COMMITTED',result:{id:'77'}}}))
+  await page.goto('/');await signIn(page)
+  await page.evaluate(key=>sessionStorage.setItem('orderflow.submission-recovery',JSON.stringify([{actor:'1',fingerprint:'a'.repeat(64),key,operation:'POST /stock-requests',createdAt:Date.now()}])),key)
+  await page.reload()
+  await page.getByRole('button',{name:'Check previous submission'}).click()
+  await expect(page.getByText('Previous submission completed. Review it before making another change.')).toBeVisible()
+  await expect(page.getByRole('link',{name:'Open record →'})).toHaveAttribute('href','/stock-requests/77')
+  expect(await page.evaluate(()=>sessionStorage.getItem('orderflow.submission-recovery'))).not.toContain(key)
+})
+
+test('evidence deletion confirmation updates history and locks decided evidence',async({page})=>{
+  await mockSession(page);let removed=false,deletes=0
+  await page.route('**/api/stock-requests/77',route=>route.fulfill({json:{id:'77',requestType:'LOSS',warehouseId:'1',productId:'9',productName:'Hammer',sku:'HAMMER-001',decision:removed?'REJECTED':null}}))
+  await page.route('**/api/evidence/stock-requests/77**',route=>{
+    if(route.request().method()==='DELETE'){removed=true;deletes++;return route.fulfill({status:204})}
+    return route.fulfill({json:{items:removed?[]:[{id:'8',filename:'wrong.png'}],canUpload:!removed,canDelete:!removed,removed:removed?[{id:'8',filename:'wrong.png',removedBy:'Warehouse Manager',removedAt:'2026-10-04T00:00:00Z',cleanupStatus:'DONE'}]:[]}})
+  })
+  await page.goto('/stock-requests/77');await signIn(page)
+  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'Delete',exact:true}).click()
+  expect(deletes).toBe(0);await expect(page.getByRole('link',{name:'wrong.png'})).toBeVisible()
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Delete',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'Deletion history'})).toBeVisible()
+  await expect(page.getByRole('link',{name:'wrong.png'})).toHaveCount(0)
+  await expect(page.getByText('Evidence is locked after a decision.')).toBeVisible()
+  await expect(page.getByRole('button',{name:'Upload evidence'})).toHaveCount(0)
+  expect(deletes).toBe(1)
+})
+
+test('a saved evidence deletion reports refresh failure without offering another delete',async({page})=>{
+  await mockSession(page)
+  let deleted=false,deletes=0
+  await page.route('**/api/stock-requests/77',route=>route.fulfill({json:{id:'77',requestType:'LOSS',warehouseId:'1',productId:'9',decision:null}}))
+  await page.route('**/api/evidence/stock-requests/77**',route=>{
+    if(route.request().method()==='DELETE'){deleted=true;deletes++;return route.fulfill({status:204})}
+    if(deleted)return route.fulfill({status:503,json:{error:{code:'UNAVAILABLE',message:'Temporary refresh failure.'}}})
+    return route.fulfill({json:{items:[{id:'8',filename:'wrong.png'}],canUpload:true,canDelete:true,removed:[]}})
+  })
+  await page.goto('/stock-requests/77');await signIn(page)
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Delete',exact:true}).click()
+  await expect(page.getByRole('status')).toContainText('Evidence deleted.')
+  await expect(page.getByRole('alert')).toContainText('The change was saved, but the page could not refresh.')
+  await expect(page.getByRole('button',{name:'Delete',exact:true})).toHaveCount(0)
+  expect(deletes).toBe(1)
+})
+
+test('a completed order action reports refresh failure as saved',async({page})=>{
+  await mockSession(page)
+  let fulfilled=false,writes=0
+  await page.route('**/api/orders/29**',route=>{
+    if(route.request().method()==='POST'){fulfilled=true;writes++;return route.fulfill({json:{id:'29',status:'FULFILLED'}})}
+    if(fulfilled)return route.fulfill({status:503,json:{error:{code:'UNAVAILABLE',message:'Temporary refresh failure.'}}})
+    return route.fulfill({json:{id:'29',orderNumber:'QA-ORDER-29',status:'CONFIRMED',revision:1,items:[{id:'81',productId:'9',sku:'HAMMER-001',name:'Hammer',warehouseId:'1',quantity:'1'}]}})
+  })
+  await page.goto('/orders/29');await signIn(page)
+  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Fulfill',exact:true}).click()
+  await expect(page.getByRole('alert')).toContainText('The change was saved, but the page could not refresh.')
+  expect(writes).toBe(1)
+})
+
+test('a completed stock decision reports refresh failure as saved',async({page})=>{
+  await mockSession(page)
+  let decided=false,writes=0
+  await page.route('**/api/stock-requests/77**',route=>{
+    if(route.request().method()==='POST'){decided=true;writes++;return route.fulfill({json:{id:'77',decision:'REJECTED'}})}
+    if(decided)return route.fulfill({status:503,json:{error:{code:'UNAVAILABLE',message:'Temporary refresh failure.'}}})
+    return route.fulfill({json:{id:'77',requestType:'LOSS',warehouseId:'1',productId:'9',decision:null}})
+  })
+  await page.goto('/stock-requests/77');await signIn(page)
+  await page.getByLabel('Decision').selectOption('REJECTED')
+  await page.getByLabel('Reason',{exact:true}).fill('Reviewed')
+  await page.getByRole('button',{name:'Submit decision'}).click()
+  await expect(page.getByRole('alert')).toContainText('The change was saved, but the page could not refresh.')
+  expect(writes).toBe(1)
+})
+
+test('Vietnamese keeps product data unchanged while translating notification templates',async({page})=>{
+  await mockSession(page)
+  await page.route('**/api/products/9',route=>route.fulfill({json:{id:'9',sku:'Pending',name:'Order',category:'Stock',unit:'EA',attributes:{},active:true,stock:[],suppliers:[{name:'Pending',primarySupplier:true,cost:'1',currency:'USD'}]}}))
+  await page.route('**/api/notifications?**',route=>route.fulfill({json:{items:[{id:'1',title:'Order assigned',titleKey:'Order assigned',titleValues:{},body:'Order Pending is assigned to you.',messageKey:'Order {document} is assigned to you.',messageValues:{document:'Pending'},targetPath:'/orders/29',createdAt:'2026-10-04T00:00:00Z',readAt:'2026-10-04T00:01:00Z'}],nextCursor:null}}))
+  await page.goto('/products/9');await signIn(page)
+  await page.getByLabel('Language').selectOption('vi')
+  await expect(page.getByRole('heading',{name:'Order',exact:true})).toBeVisible()
+  await expect(page.getByRole('cell',{name:'Pending',exact:true})).toBeVisible()
+  await expect(page.getByRole('cell',{name:'Có',exact:true})).toBeVisible()
+  await page.goto('/notifications')
+  await expect(page.getByText('Đơn hàng được giao', {exact:true})).toBeVisible()
+  await expect(page.getByText('Đơn hàng Pending được giao cho bạn.',{exact:true})).toBeVisible()
+})
+
+test('sign-out failure retains the authenticated account and permits retry',async({page})=>{
+  await mockSession(page);let attempts=0
+  await page.route('**/api/auth/logout',async route=>{
+    if(++attempts===1)return route.abort('failed')
+    return route.fallback()
+  })
+  await page.goto('/');await signIn(page)
+  await page.getByRole('button',{name:'Sign out',exact:true}).click()
+  await expect(page.getByRole('alert')).toContainText('Connection failed')
+  await expect(page.locator('.account-name')).toContainText('Warehouse Manager')
+  await page.getByRole('button',{name:'Sign out',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'Welcome back'})).toBeVisible()
+  expect(attempts).toBe(2)
+})
+
 test('Back restores a filtered later product page and breadcrumbs link to the section', async ({ page }) => {
   await mockSession(page)
   await page.route('**/api/products**', route => {
@@ -89,7 +338,7 @@ test('logo, icon sign-out and navigation remain usable on mobile in both languag
   await page.getByRole('link', { name: 'Stock', exact: true }).click()
   await page.getByLabel('Language').selectOption('vi')
   await expect(page.getByRole('button', { name: 'Quay lại', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Toggle menu' }).click()
+  await page.getByRole('button', { name: 'Mở hoặc đóng menu' }).click()
   await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Chào mừng trở lại' })).toBeVisible()
 })
@@ -352,19 +601,19 @@ test('layout review captures logo, long account footer and breadcrumbs at four w
   await page.goto('/products/9')
   for (const width of [1440, 768, 390, 320]) for (const language of ['en', 'vi']) {
     await page.setViewportSize({ width, height: 900 })
-    await page.getByLabel('Language').selectOption(language)
+    await page.getByLabel(/^(Language|Ngôn ngữ)$/).selectOption(language)
     const logo = page.locator('.auth-brand img')
     await expect(logo).toBeVisible()
     expect(await logo.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(258)
     await page.screenshot({ path: join(directory, `signin-${width}-${language}.png`), fullPage: true })
   }
-  await page.getByLabel('Language').selectOption('en'); await signIn(page)
+  await page.getByLabel(/^(Language|Ngôn ngữ)$/).selectOption('en'); await signIn(page)
   for (const width of [1440, 768, 390, 320]) for (const language of ['en', 'vi']) {
-    await page.setViewportSize({ width, height: 900 }); await page.getByLabel('Language').selectOption(language)
+    await page.setViewportSize({ width, height: 900 }); await page.getByLabel(/^(Language|Ngôn ngữ)$/).selectOption(language)
     await expect(page.getByRole('heading', { name: 'Smartphone / Điện thoại thông minh', exact: true })).toBeVisible()
     await page.screenshot({ path: join(directory, `product-${width}-${language}.png`), fullPage: true })
     if (width < 740) {
-      await page.getByRole('button', { name: 'Toggle menu' }).click()
+      await page.getByRole('button', { name: language === 'en' ? 'Toggle menu' : 'Mở hoặc đóng menu' }).click()
       await expect(page.locator('.sidebar')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)')
     } else await expect(page.getByRole('button', { name: language === 'en' ? 'Close menu' : 'Đóng trình đơn', exact: true })).toBeHidden()
     const signout = page.locator('.sidebar-footer button')
@@ -381,7 +630,7 @@ test('layout review captures logo, long account footer and breadcrumbs at four w
   }
 })
 
-async function mockSession(page: Page, role: 'MANAGER' | 'VIEWER' = 'MANAGER', displayName = 'Warehouse Manager') {
+async function mockSession(page: Page, role: 'MANAGER' | 'STAFF' | 'VIEWER' = 'MANAGER', displayName = 'Warehouse Manager') {
   await page.addInitScript(() => { Object.defineProperty(window, 'EventSource', { value: undefined }) })
   let signedIn = false
   await page.route('**/api/**', async route => {
@@ -402,6 +651,7 @@ async function mockSession(page: Page, role: 'MANAGER' | 'VIEWER' = 'MANAGER', d
     if (path === '/api/products' && method === 'POST') return send({ id: '10' }, 201)
     if (path === '/api/products/10') return send({ id: '10', sku: 'NEW-001', name: 'New hammer', categoryId: '1', category: 'Tools', unitId: '1', unit: 'EA', attributes: { material: 'steel' }, active: true, revision: '0', stock: [], suppliers: [] })
     if (path === '/api/stock') return send({ items: [{ warehouseId: '1', warehouse: 'MAIN', productId: '9', sku: 'HAMMER-001', name: 'Hammer', onHand: '10.000000', reserved: '2.000000', available: '8.000000', version: '1' }], nextCursor: null })
+    if (path === '/api/reports/valuation') return send({ currencyTotals: [], unvaluedStockRows: '0' })
     if (path === '/api/notifications/stream') return route.abort()
     return send({ items: [], nextCursor: null })
   })
@@ -742,7 +992,10 @@ for (const kind of ['orders', 'returns', 'transfers'] as const) {
   test(`${kind} form creates a draft, saves lines and completes its main workflow`, async ({ page }) => {
     await mockSession(page)
     await page.route('**/api/warehouses', route => route.fulfill({ json: { items: [{ id: '1', code: 'MAIN', name: 'Main' }, { id: '2', code: 'OTHER', name: 'Other' }] } }))
-    if (kind === 'returns') await page.route('**/api/orders/21', route => route.fulfill({ json: { id: '21', orderNumber: 'QA-ORDER', status: 'FULFILLED', revision: 1, items: [{ id: '22', productId: '9', sku: 'HAMMER-001', warehouseId: '1', quantity: '5', returnableQty: '3' }] } }))
+    if (kind === 'returns') {
+      await page.route('**/api/orders?**', route => route.fulfill({ json: { items: [{ id: '21', orderNumber: 'QA-ORDER', status: 'FULFILLED' }], nextCursor: null } }))
+      await page.route('**/api/orders/21', route => route.fulfill({ json: { id: '21', orderNumber: 'QA-ORDER', status: 'FULFILLED', revision: 1, items: [{ id: '22', productId: '9', sku: 'HAMMER-001', warehouseId: '1', quantity: '5', returnableQty: '3' }] } }))
+    }
     let status = 'DRAFT', revision = 0
     let items: Record<string, string | null>[] = []
     const requests: { path: string; body: unknown; key?: string }[] = []
@@ -774,7 +1027,7 @@ for (const kind of ['orders', 'returns', 'transfers'] as const) {
     const drawer = page.locator('.drawer')
     await drawer.getByLabel('Document number').fill('QA-DOCUMENT')
     if (kind === 'returns') {
-      await drawer.getByLabel('Fulfilled order ID').fill('21')
+      await drawer.getByLabel('Fulfilled order', { exact: true }).selectOption('21')
       await drawer.getByRole('combobox', { name: 'Warehouse' }).selectOption('1')
       await drawer.getByLabel('Reason').fill('QA return')
     }
