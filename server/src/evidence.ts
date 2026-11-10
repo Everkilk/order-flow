@@ -12,6 +12,7 @@ import type { Config } from './config.js';
 import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { prepareWrite, publishFile,  storedFileExists, openStoredStream } from './storage.js';
+import {demoLimits} from './demo-limits.js';
 
 const id=z.string().regex(/^[1-9]\d*$/);
 const maxBytes=5*1024*1024;
@@ -23,12 +24,12 @@ function actualType(bytes:Buffer):string|null {
   if(bytes.subarray(0,5).toString('ascii')==='%PDF-') return 'application/pdf';
   return null;
 }
-async function receiveEvidence(req:Request,path:string) {
+async function receiveEvidence(req:Request,path:string,byteLimit=maxBytes) {
   if(!req.headers['content-type']?.startsWith('multipart/form-data;'))
     throw new AppError(415,'INVALID_CONTENT_TYPE','Upload a multipart PNG, JPEG, or PDF file.');
   return new Promise<{filename:string;contentType:string;sha256:string}>((done,fail) => {
     let parser:Busboy.Busboy;
-    try {parser=Busboy({headers:req.headers,limits:{fileSize:maxBytes,files:1,fields:0,parts:2}});}
+    try {parser=Busboy({headers:req.headers,limits:{fileSize:byteLimit+1,files:1,fields:0,parts:2}});}
     catch {fail(new AppError(415,'INVALID_CONTENT_TYPE','Upload a multipart PNG, JPEG, or PDF file.'));return;}
     let saved:Promise<void>|null=null,filename='',limited=false,seen=false;
     parser.on('file',(field,file,info) => {
@@ -37,6 +38,7 @@ async function receiveEvidence(req:Request,path:string) {
         limited=true;file.resume();return;
       }
       filename=info.filename.replace(/[^\w .-]/g,'_').slice(0,200);
+      let bytes=0;file.on('data',chunk=>{bytes+=chunk.length;if(bytes>byteLimit)limited=true;});
       file.on('limit',()=>{limited=true;});
       saved=pipeline(file,createWriteStream(path,{flags:'wx'}));
     });
@@ -47,7 +49,7 @@ async function receiveEvidence(req:Request,path:string) {
     parser.on('close',() => {
       if(!seen || !saved) return fail(new AppError(400,'INVALID_UPLOAD','Provide one file in the file field.'));
       saved.then(async() => {
-        if(limited) throw new AppError(413,'FILE_TOO_LARGE','Evidence must be one file of at most 5 MB.');
+        if(limited) throw new AppError(413,'FILE_TOO_LARGE',byteLimit===maxBytes?'Evidence must be one file of at most 5 MB.':`Evidence must be one file of at most ${Math.floor(byteLimit/1024/1024)} MB in this demo.`);
         const bytes=await readFile(path);
         const contentType=actualType(bytes);
         if(!contentType) throw new AppError(415,'UNSUPPORTED_FILE','Evidence must be PNG, JPEG, or PDF.');
@@ -118,12 +120,13 @@ export function evidenceRoutes(pool:pg.Pool,config:Config):Router {
       await checkTarget(pool,target.type,targetId,actor);
       const key=`evidence/${randomUUID()}.bin`,path=await prepareWrite(config,key);
       let metadata:{filename:string;contentType:string;sha256:string};
-      try {metadata=await receiveEvidence(req,path);await publishFile(config,key);}
+      try {metadata=await receiveEvidence(req,path,config.DEMO_MODE?demoLimits(config).evidenceBytes:maxBytes);}
       catch(error) {await cleanupUpload(pool,config,key,actor.id);throw error;}
       try {
         let created=false;
         const row=await withMutation(pool,req,actor,async c => {
           await checkTarget(c,target.type,targetId,actor,true);
+          await publishFile(config,key,pool);
           const inserted=await c.query(`INSERT INTO orderflow.evidence_files
             (uploaded_by,storage_key,filename,content_type,sha256) VALUES($1,$2,$3,$4,$5)
             RETURNING id::text,filename,content_type AS "contentType",sha256,
@@ -171,10 +174,10 @@ export function evidenceRoutes(pool:pg.Pool,config:Config):Router {
     if(row.discrepancy) await checkTarget(pool,'discrepancy',row.discrepancy,actor);
     else if(row.request) await checkTarget(pool,'stock-request',row.request,actor);
     else throw new AppError(404,'NOT_FOUND','Evidence not found.');
-    if(!await storedFileExists(config,row.storage_key)) throw new AppError(410,'FILE_MISSING','Evidence file is unavailable.');
+    if(!await storedFileExists(config,row.storage_key,pool)) throw new AppError(410,'FILE_MISSING','Evidence file is unavailable.');
+    const source=await openStoredStream(config,row.storage_key,pool);
     res.attachment(row.filename);
     res.type(row.content_type);
-    const source=await openStoredStream(config,row.storage_key);
     source.on('error',error=>{
       if(!res.headersSent) res.status(500).end();else res.destroy(error);
     }).pipe(res);

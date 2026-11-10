@@ -3,9 +3,12 @@ import { makePool } from './db.js';
 import { createApp } from './app.js';
 import { logger } from './errors.js';
 import { runEmbeddedWorker } from './embedded-worker.js';
+import {initializeDemoStorage} from './demo-maintenance.js';
+import {closeDemoAccounting} from './demo-limits.js';
 
 const config = readConfig();
 const pool = makePool(config);
+await initializeDemoStorage(pool,config);
 const shutdownController = new AbortController();
 const server = createApp(pool, config, shutdownController.signal).listen(config.PORT, config.HOST, () => {
   logger.info({ port: config.PORT, host: config.HOST }, 'OrderFlow API listening');
@@ -18,6 +21,7 @@ async function shutdown() {
   shutdownController.abort();
   server.close(async () => {
     if (workerDone) await workerDone;
+    await closeDemoAccounting(pool);
     await pool.end();
     process.exit(0);
   });

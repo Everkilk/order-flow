@@ -1,5 +1,6 @@
 import { createReadStream, createWriteStream } from 'node:fs';
 import { once } from 'node:events';
+import {Transform} from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
@@ -9,12 +10,14 @@ import { z } from 'zod';
 import { Decimal } from 'decimal.js';
 import type { Config } from './config.js';
 import { withTransaction } from './db.js';
-import { logger } from './errors.js';
+import { logger,AppError } from './errors.js';
 import { withLocalFile, prepareWrite, publishFile, removeStoredFile, storedFileExists } from './storage.js';
 import { validateOperationalImport, commitOperationalImport } from './operational-imports.js';
 import { notifyUser } from './notifications.js';
 import { sha256File } from './file-integrity.js';
 import { decimalText } from './decimal-text.js';
+import {demoLimits,validateDemoCsv,checkDemoDatabase} from './demo-limits.js';
+import {demoMaintenance} from './demo-maintenance.js';
 
 const id=z.string().regex(/^[1-9]\d*$/).refine(value=>
   value.length<=19 && BigInt(value)<=9223372036854775807n);
@@ -84,6 +87,7 @@ async function validateImport(pool:pg.Pool,config:Config,jobId:string) {
   const importId=found.rows[0].id as string;
   await pool.query("UPDATE orderflow.import_jobs SET status='VALIDATING' WHERE id=$1",[importId]);
   await withLocalFile(config,found.rows[0].storage_key,async path => {
+  await validateDemoCsv(config,path);
   const fingerprint=await sha256File(path);
   const parsed=await readProductCsv(path);
   if (await sha256File(path)!==fingerprint) throw new Error('CSV_CHANGED');
@@ -115,7 +119,7 @@ async function validateImport(pool:pg.Pool,config:Config,jobId:string) {
       SET status=$2,validated_rows=$3,validated_sha256=$4 WHERE id=$1`,
       [importId,parsed.errors.length?'INVALID':'READY',parsed.totalRows,fingerprint]);
   });
-  });
+  },pool);
 }
 
 async function commitImport(pool:pg.Pool,config:Config,importId:string) {
@@ -124,6 +128,7 @@ async function commitImport(pool:pg.Pool,config:Config,importId:string) {
   if(found.rows[0].kind==='OPENING_STOCK' || found.rows[0].kind==='ORDERS')
     return commitOperationalImport(pool,config,importId,found.rows[0].kind);
   await withLocalFile(config,found.rows[0].storage_key,async path => {
+  await validateDemoCsv(config,path);
   const fingerprint=found.rows[0].validated_sha256 as string|null;
   if (fingerprint && await sha256File(path)!==fingerprint) throw new Error('CSV_CHANGED');
   const parsed=await readProductCsv(path);
@@ -146,7 +151,7 @@ async function commitImport(pool:pg.Pool,config:Config,importId:string) {
       VALUES($1,'PRODUCT_IMPORT','import_job',$2,$3)`,
       [job.rows[0].uploaded_by,importId,JSON.stringify({rows:parsed.rows.length})]);
   });
-  });
+  },pool);
 }
 
 const safeCell=(value:unknown) => {
@@ -159,7 +164,7 @@ async function exportCsv(pool:pg.Pool,config:Config,jobId:string) {
   if (!found.rowCount) throw new Error('EXPORT_JOB_MISSING');
   const job=found.rows[0],warehouseId=job.filters.warehouseId as string|undefined;
   if(job.storage_key) {
-    if(await storedFileExists(config,job.storage_key)) return;
+    if(await storedFileExists(config,job.storage_key,pool)) return;
   }
   const key=`exports/${randomUUID()}.csv`,path=await prepareWrite(config,key);
   const columns=job.kind==='PRODUCTS'
@@ -169,7 +174,14 @@ async function exportCsv(pool:pg.Pool,config:Config,jobId:string) {
     : ['product_id','sku','name','available','threshold'];
   const formatter=stringify({header:true,columns});
   const numericColumns=new Set(['selling_price','on_hand','reserved','available','on_hand_delta','reserved_delta','threshold']);
-  const done=pipeline(formatter,createWriteStream(path,{flags:'wx'}));
+  let bytes=0;
+  const sizeLimit=new Transform({transform(chunk,_encoding,done){
+    bytes+=chunk.length;
+    if(config.DEMO_MODE && bytes>demoLimits(config).exportBytes)done(new Error('DEMO_EXPORT_TOO_LARGE'));
+    else done(null,chunk);
+  }});
+  const done=pipeline(formatter,sizeLimit,createWriteStream(path,{flags:'wx'}));
+  void done.catch(()=>{});
   try {
     let cursor='0';
     while (true) {
@@ -200,13 +212,14 @@ async function exportCsv(pool:pg.Pool,config:Config,jobId:string) {
     }
     formatter.end();
     await done;
-    await publishFile(config,key);
+    await publishFile(config,key,pool);
     await pool.query(`UPDATE orderflow.export_jobs SET storage_key=$2,expires_at=now()+interval '7 days' WHERE id=$1`,
       [job.id,key]);
-  } catch(error) {formatter.destroy();await done.catch(()=>{});await removeStoredFile(config,key).catch(()=>{});throw error;}
+  } catch(error) {formatter.destroy();await done.catch(()=>{});await removeStoredFile(config,key,pool).catch(()=>{});throw error;}
 }
 
 export async function runOneJob(pool:pg.Pool,config:Config):Promise<boolean> {
+  await demoMaintenance(pool,config);
   const claimed=await withTransaction(pool,async c => c.query(`WITH next AS (
     SELECT id FROM orderflow.background_jobs WHERE
       (status='PENDING' AND available_at<=now()) OR (status='PROCESSING' AND lease_until<now())
@@ -221,11 +234,12 @@ export async function runOneJob(pool:pg.Pool,config:Config):Promise<boolean> {
       WHERE id=$1 AND status='PROCESSING'`,[job.id]).catch(error=>logger.error({err:error,jobId:job.id},'job heartbeat failed'));
   },60_000).unref();
   try {
+    if(['IMPORT_VALIDATE','IMPORT_COMMIT','EXPORT_CSV'].includes(job.kind))await checkDemoDatabase(pool,config);
     if (job.kind==='IMPORT_VALIDATE') await validateImport(pool,config,job.id);
     else if (job.kind==='IMPORT_COMMIT') await commitImport(pool,config,id.parse(job.payload.importId));
     else if (job.kind==='EXPORT_CSV') await exportCsv(pool,config,job.id);
-    else if (job.kind==='EVIDENCE_DELETE') await removeStoredFile(config,z.string().regex(/^evidence\/[0-9a-f-]{36}\.bin$/).parse(job.payload.storageKey));
-    else if (job.kind==='UPLOAD_DELETE') await removeStoredFile(config,z.string().regex(/^(?:evidence\/[0-9a-f-]{36}\.bin|imports\/[0-9a-f-]{36}\.csv)$/).parse(job.payload.storageKey));
+    else if (job.kind==='EVIDENCE_DELETE') await removeStoredFile(config,z.string().regex(/^evidence\/[0-9a-f-]{36}\.bin$/).parse(job.payload.storageKey),pool);
+    else if (job.kind==='UPLOAD_DELETE') await removeStoredFile(config,z.string().regex(/^(?:evidence\/[0-9a-f-]{36}\.bin|(?:imports|exports)\/[0-9a-f-]{36}\.csv)$/).parse(job.payload.storageKey),pool);
     else throw new Error('UNKNOWN_JOB_KIND');
     await withTransaction(pool,async c => {
       await c.query(`UPDATE orderflow.background_jobs SET status='DONE',lease_until=NULL WHERE id=$1`,[job.id]);
@@ -261,8 +275,9 @@ export async function runOneJob(pool:pg.Pool,config:Config):Promise<boolean> {
     const known=error instanceof Error ? error.message : '';
     const permanent=['CSV_CHANGED','IMPORT_NOT_READY','IMPORT_DATA_CHANGED','IMPORT_JOB_MISSING',
       'IMPORT_PERMISSION_CHANGED',
-      'UNKNOWN_JOB_KIND'].includes(known) || ['23505','23503','23514','22003'].includes(dbCode);
-    const code=dbCode ? ('DB_'+dbCode) : /^[A-Z_]+$/.test(known) ? known : 'JOB_FAILED';
+      'UNKNOWN_JOB_KIND','DEMO_EXPORT_TOO_LARGE'].includes(known) || ['23505','23503','23514','22003'].includes(dbCode)
+      || (error instanceof AppError && [400,403,410,413,429].includes(error.status));
+    const code=error instanceof AppError?error.code:dbCode ? ('DB_'+dbCode) : /^[A-Z_]+$/.test(known) ? known : 'JOB_FAILED';
     const dead=permanent || job.attempts>=3;
     await withTransaction(pool,async c => {
       await c.query(`UPDATE orderflow.background_jobs SET status=$2,lease_until=NULL,

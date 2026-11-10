@@ -2,9 +2,12 @@ import { readConfig } from './config.js';
 import { makePool } from './db.js';
 import { logger } from './errors.js';
 import { runOneJob } from './job-worker.js';
+import {initializeDemoStorage} from './demo-maintenance.js';
+import {closeDemoAccounting} from './demo-limits.js';
 
 const config=readConfig();
 const pool=makePool(config);
+await initializeDemoStorage(pool,config);
 let stopping=false;
 process.once('SIGINT',()=>{stopping=true;});
 process.once('SIGTERM',()=>{stopping=true;});
@@ -18,4 +21,4 @@ try {
 } catch(error) {
   logger.fatal({err:error},'worker stopped');
   process.exitCode=1;
-} finally {await pool.end();}
+} finally {await closeDemoAccounting(pool);await pool.end();}

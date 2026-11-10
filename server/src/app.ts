@@ -19,6 +19,7 @@ import { jobRoutes } from './jobs.js';
 import { dashboardRoutes } from './dashboard.js';
 import { evidenceRoutes } from './evidence.js';
 import { mutationRecoveryRoutes } from './mutations.js';
+import {demoRequestGate,demoWriteGate,publicDemoInfo} from './demo-limits.js';
 
 export function createApp(pool: pg.Pool, config: Config, shutdownSignal?: AbortSignal) {
   const app = express();
@@ -36,11 +37,14 @@ export function createApp(pool: pg.Pool, config: Config, shutdownSignal?: AbortS
   app.get('/health/live', (_req, res) => res.json({ status: 'ok' }));
   app.get('/health/ready', async (_req, res) => {
     const migration=await pool.query(`SELECT 1 FROM public.orderflow_schema_migrations
-      WHERE filename='011_submission_evidence.sql'`);
+      WHERE filename=$1`,[config.DEMO_MODE?'012_demo_limits.sql':'011_submission_evidence.sql']);
     if (!migration.rowCount) throw new AppError(503,'SCHEMA_NOT_READY','Database migrations are not current.');
     res.json({ status: 'ready' });
   });
+  app.use('/api',demoRequestGate(config));
+  app.get('/api/demo-info',(_req,res)=>res.json(publicDemoInfo(config)));
   app.use('/api', authMiddleware(pool));
+  app.use('/api',demoRequestGate(config,true),demoWriteGate(pool,config));
   app.use('/api', authRoutes(pool, config));
   app.use('/api', mutationRecoveryRoutes(pool));
   app.use('/api', dashboardRoutes(pool));

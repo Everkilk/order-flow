@@ -13,6 +13,7 @@ import { withMutation } from './mutations.js';
 import { AppError } from './errors.js';
 import { sha256File } from './file-integrity.js';
 import { prepareWrite, publishFile,  withLocalFile, openStoredStream } from './storage.js';
+import {admitDemoJob,demoLimits,validateDemoCsv} from './demo-limits.js';
 export { storagePath } from './storage.js';
 
 const id=z.string().regex(/^[1-9]\d*$/);
@@ -21,13 +22,13 @@ const exportInput=z.object({kind:z.enum(['PRODUCTS','STOCK','MOVEMENTS','REPORT'
 const maxFileBytes=20*1024*1024;
 const previewLimit=20;
 
-async function receiveCsv(req: import('express').Request, path: string) {
+async function receiveCsv(req: import('express').Request, path: string,byteLimit=maxFileBytes) {
   let filename='',contentType='';
   if (!req.headers['content-type']?.startsWith('multipart/form-data;'))
     throw new AppError(415,'INVALID_CONTENT_TYPE','Upload a multipart CSV file in the file field.');
   await new Promise<void>((resolveUpload,rejectUpload) => {
     let parser:Busboy.Busboy;
-    try {parser=Busboy({headers:req.headers,limits:{fileSize:maxFileBytes,files:1,fields:0,parts:2}});}
+    try {parser=Busboy({headers:req.headers,limits:{fileSize:byteLimit+1,files:1,fields:0,parts:2}});}
     catch {rejectUpload(new AppError(415,'INVALID_CONTENT_TYPE','Upload a multipart CSV file in the file field.'));return;}
     let saved:Promise<void>|null=null,limited=false,seen=false;
     parser.on('file',(field,file,info) => {
@@ -38,6 +39,7 @@ async function receiveCsv(req: import('express').Request, path: string) {
         limited=true;
         return;
       }
+      let bytes=0;file.on('data',chunk=>{bytes+=chunk.length;if(bytes>byteLimit)limited=true;});
       file.on('limit',()=>{limited=true;});
       saved=pipeline(file,createWriteStream(path,{flags:'wx'}));
     });
@@ -47,7 +49,7 @@ async function receiveCsv(req: import('express').Request, path: string) {
     parser.on('partsLimit',()=>{limited=true;});
     parser.on('close',() => {
       if (!seen || !saved) return rejectUpload(new AppError(400,'INVALID_UPLOAD','Provide one .csv file in the file field.'));
-      saved.then(()=>limited ? rejectUpload(new AppError(413,'CSV_TOO_LARGE','CSV must be at most 20 MB.')) : resolveUpload(),rejectUpload);
+      saved.then(()=>limited ? rejectUpload(new AppError(413,'CSV_TOO_LARGE',byteLimit===maxFileBytes?'CSV must be at most 20 MB.':`CSV must be at most ${Math.floor(byteLimit/1024)} KB in this demo.`)) : resolveUpload(),rejectUpload);
     });
     req.on('aborted',()=>rejectUpload(new AppError(400,'UPLOAD_ABORTED','Upload was interrupted.')));
     req.pipe(parser);
@@ -77,11 +79,13 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
   const uploadImport=(kind:'PRODUCTS'|'OPENING_STOCK'|'ORDERS'):RequestHandler => async(req,res) => {
     const actor=res.locals.actor as Actor,key=`imports/${randomUUID()}.csv`,path=await prepareWrite(config,key);
     let fingerprint: string,metadata:{filename:string;contentType:string};
-    try { metadata=await receiveCsv(req,path); fingerprint=await sha256File(path); await publishFile(config,key); }
+    try { metadata=await receiveCsv(req,path,config.DEMO_MODE?demoLimits(config).csvBytes:maxFileBytes); await validateDemoCsv(config,path); fingerprint=await sha256File(path); }
     catch(error) { await cleanupUpload(pool,config,key,actor.id);throw error; }
     try {
       let created=false;
       const row=await withMutation(pool,req,actor,async c => {
+        await admitDemoJob(c,config,actor.id);
+        await publishFile(config,key,pool);
         created=true;
         const job=await c.query(`INSERT INTO orderflow.background_jobs(kind,requested_by,dedupe_key)
           VALUES('IMPORT_VALIDATE',$1,$2) RETURNING id::text`,[actor.id,`import-validate:${key}`]);
@@ -147,7 +151,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
         if(imported.validatedSha256 && await sha256File(path)!==imported.validatedSha256)
           throw new AppError(409,'CSV_CHANGED','CSV changed after validation. Upload it again.');
         return result;
-      });
+      },pool);
     }
     catch(error) {
       if(error instanceof AppError) throw error;
@@ -171,6 +175,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
       if (found.rows[0].commit_key!==key) throw new AppError(409,'IDEMPOTENCY_CONFLICT','Use the commit key from the import.');
       if (found.rows[0].status==='COMMITTED') return {status:'COMMITTED'};
       if (found.rows[0].status!=='READY') throw new AppError(409,'IMPORT_NOT_READY','Validate the import before committing.');
+      await admitDemoJob(c,config,actor.id);
       await c.query(`INSERT INTO orderflow.background_jobs(kind,requested_by,dedupe_key,payload)
         VALUES('IMPORT_COMMIT',$1,$2,$3) ON CONFLICT(dedupe_key) DO NOTHING`,
         [actor.id,`import-commit:${importId}`,JSON.stringify({importId})]);
@@ -188,6 +193,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
     if (input.warehouseId && !warehouseAllowed(actor,input.warehouseId))
       throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
     const row=await withMutation(pool,req,actor,async c => {
+      await admitDemoJob(c,config,actor.id);
       const job=await c.query(`INSERT INTO orderflow.background_jobs
         (kind,requested_by,dedupe_key,payload) VALUES('EXPORT_CSV',$1,$2,$3) RETURNING id::text`,
         [actor.id,`export:${randomUUID()}`,JSON.stringify(input)]);
@@ -202,7 +208,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
     const input=z.object({cursor:id.optional(),limit:z.coerce.number().int().min(1).max(100).default(25)}).strict().parse(req.query);
     const actor=res.locals.actor as Actor;
     const result=await pool.query(`SELECT e.id::text,e.kind,e.format,j.status,
-      e.storage_key IS NOT NULL AS ready,j.created_at AS "createdAt"
+      (e.storage_key IS NOT NULL AND e.expires_at>now()) AS ready,e.expires_at<=now() AS expired,j.created_at AS "createdAt"
       FROM orderflow.export_jobs e JOIN orderflow.background_jobs j ON j.id=e.job_id
       WHERE ($1::bigint IS NULL OR e.id<$1) AND ($2 OR e.requested_by=$3)
         AND ($2 OR e.filters->>'warehouseId' IS NULL OR (e.filters->>'warehouseId')::bigint=ANY($4::bigint[]))
@@ -213,7 +219,7 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
   router.get('/exports/:id',requireRole('STAFF','MANAGER'),async(req,res) => {
     const exportId=id.parse(req.params.id),actor=res.locals.actor as Actor;
     const found=await pool.query(`SELECT e.id::text,e.kind,e.format,e.filters,j.status,j.last_error_code AS "lastErrorCode",
-      e.storage_key IS NOT NULL AS "ready" FROM orderflow.export_jobs e
+      (e.storage_key IS NOT NULL AND e.expires_at>now()) AS "ready",e.expires_at<=now() AS expired FROM orderflow.export_jobs e
       JOIN orderflow.background_jobs j ON j.id=e.job_id WHERE e.id=$1 AND (e.requested_by=$2 OR $3)`,
       [exportId,actor.id,actor.role==='MANAGER']);
     if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Export not found.');
@@ -224,17 +230,18 @@ export function jobRoutes(pool: pg.Pool,config: Config): Router {
   });
   router.get('/exports/:id/file',requireRole('STAFF','MANAGER'),async(req,res) => {
     const exportId=id.parse(req.params.id),actor=res.locals.actor as Actor;
-    const found=await pool.query(`SELECT e.storage_key,e.filters,j.status FROM orderflow.export_jobs e
+    const found=await pool.query(`SELECT e.storage_key,e.filters,j.status,e.expires_at<=now() AS expired FROM orderflow.export_jobs e
       JOIN orderflow.background_jobs j ON j.id=e.job_id
       WHERE e.id=$1 AND (e.requested_by=$2 OR $3)`,[exportId,actor.id,actor.role==='MANAGER']);
     if (!found.rowCount) throw new AppError(404,'NOT_FOUND','Export not found.');
     if (found.rows[0].filters.warehouseId && !warehouseAllowed(actor,found.rows[0].filters.warehouseId))
       throw new AppError(403,'FORBIDDEN','Warehouse access is required.');
+    if(found.rows[0].expired)throw new AppError(410,'EXPORT_EXPIRED','This export has expired. Request a new export.');
     if (found.rows[0].status!=='DONE' || !found.rows[0].storage_key)
       throw new AppError(409,'EXPORT_NOT_READY','Export is still processing.');
+    const source=await openStoredStream(config,found.rows[0].storage_key,pool);
     res.setHeader('Content-Type','text/csv; charset=utf-8');
     res.setHeader('Content-Disposition',`attachment; filename="orderflow-${exportId}.csv"`);
-    const source=await openStoredStream(config,found.rows[0].storage_key);
     source.on('error',error=>{
       if (!res.headersSent) res.status(500).end();else res.destroy(error);
     }).pipe(res);

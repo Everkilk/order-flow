@@ -101,7 +101,14 @@ export function authRoutes(pool: pg.Pool, config: Config): Router {
     }
     failures.delete(failureKey);
     const token = randomBytes(32).toString('hex');
-    await pool.query("INSERT INTO orderflow.sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '8 hours')", [user.id, digest(token)]);
+    await withTransaction(pool,async c=>{
+      if(config.DEMO_MODE){
+        await c.query("SELECT pg_advisory_xact_lock(hashtextextended('demo-session:'||$1,0))",[String(user.id)]);
+        await c.query('DELETE FROM orderflow.sessions WHERE user_id=$1 AND (revoked_at IS NOT NULL OR expires_at<=now())',[user.id]);
+        await c.query(`DELETE FROM orderflow.sessions WHERE id IN (SELECT id FROM orderflow.sessions WHERE user_id=$1 ORDER BY created_at DESC,id DESC OFFSET 5)`,[user.id]);
+      }
+      await c.query("INSERT INTO orderflow.sessions(user_id,token_hash,expires_at) VALUES($1,$2,now()+interval '8 hours')",[user.id,digest(token)]);
+    });
     res.cookie(cookieName, token, cookieOptions(config));
     res.json({ user: { id: String(user.id), email: user.email, displayName: user.display_name, role: user.role, mustChangePassword: user.must_change_password } });
   });

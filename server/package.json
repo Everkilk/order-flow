@@ -7,7 +7,8 @@
     "node": ">=20.20.0"
   },
   "scripts": {
-    "test": "npm run typecheck && npm run db:test && npm run api:test && npm run build && npm run storage:test && npm run demo:test && npm run seed:test",
+    "test": "npm run typecheck && npm run db:test && npm run api:test && npm run build && npm run storage:test && npm run demo:test && npm run seed:test && npm run demo-limits:test",
+    "demo-limits:test": "node --env-file=.env --test tests/demo-limits.test.mjs",
     "dev": "node --env-file=.env --import tsx --watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

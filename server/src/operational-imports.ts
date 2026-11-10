@@ -7,6 +7,7 @@ import type { Config } from './config.js';
 import { withTransaction } from './db.js';
 import { postInventoryEvent, type Movement } from './inventory-write.js';
 import { withLocalFile } from './storage.js';
+import {validateDemoCsv} from './demo-limits.js';
 import { sha256File } from './file-integrity.js';
 
 type Kind='OPENING_STOCK'|'ORDERS';
@@ -131,6 +132,7 @@ export async function validateOperationalImport(pool:pg.Pool,config:Config,jobId
   const job=found.rows[0];
   await pool.query("UPDATE orderflow.import_jobs SET status='VALIDATING' WHERE id=$1",[job.id]);
   await withLocalFile(config,job.storage_key,async path => {
+  await validateDemoCsv(config,path);
   const fingerprint=await sha256File(path);
   const parsed=await readCsv(path,kind);
   if(await sha256File(path)!==fingerprint) throw new Error('CSV_CHANGED');
@@ -144,13 +146,14 @@ export async function validateOperationalImport(pool:pg.Pool,config:Config,jobId
       SET status=$2,validated_rows=$3,validated_sha256=$4 WHERE id=$1`,
       [job.id,errors.length?'INVALID':'READY',parsed.totalRows,fingerprint]);
   });
-  });
+  },pool);
 }
 
 export async function commitOperationalImport(pool:pg.Pool,config:Config,importId:string,kind:Kind) {
   const found=await pool.query('SELECT storage_key,validated_sha256 FROM orderflow.import_jobs WHERE id=$1 AND kind=$2',[importId,kind]);
   if(!found.rowCount) throw new Error('IMPORT_JOB_MISSING');
   await withLocalFile(config,found.rows[0].storage_key,async path => {
+  await validateDemoCsv(config,path);
   const fingerprint=found.rows[0].validated_sha256 as string|null;
   if(fingerprint && await sha256File(path)!==fingerprint) throw new Error('CSV_CHANGED');
   const parsed=await readCsv(path,kind);
@@ -202,5 +205,5 @@ export async function commitOperationalImport(pool:pg.Pool,config:Config,importI
         kind,rows:parsed.rows.length,documents:groups.size,
       })]);
   });
-  });
+  },pool);
 }
