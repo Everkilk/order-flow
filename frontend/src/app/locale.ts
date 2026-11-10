@@ -2,6 +2,27 @@ import { errorTranslations } from './error-translations'
 export type Locale = 'en' | 'vi'
 
 const vietnamese: Record<string, string> = {
+  'PUBLIC DEMO':'BẢN DÙNG THỬ', 'Try OrderFlow':'Trải nghiệm OrderFlow', 'Demo accounts':'Tài khoản dùng thử',
+  'Choose a role to explore the warehouse workspace.':'Chọn vai trò để khám phá không gian quản lý kho.',
+  'Manager':'Quản lý', 'Staff':'Nhân viên', 'Viewer':'Người xem', 'Use account':'Dùng tài khoản',
+  'Use {role} account':'Dùng tài khoản {role}',
+  'Explore inventory, orders, approvals and reports.':'Khám phá tồn kho, đơn hàng, phê duyệt và báo cáo.',
+  'Try warehouse operations and file jobs.':'Thử các nghiệp vụ kho và nhập, xuất tệp.',
+  'Browse inventory and reports.':'Xem tồn kho và báo cáo.',
+  'Shared sample data. Your changes are visible to other visitors. Account settings are read-only.':'Dữ liệu mẫu dùng chung. Thay đổi của bạn hiển thị với người khác. Không thể sửa cài đặt tài khoản.',
+  'Account settings are read-only in this shared demo.':'Không thể sửa cài đặt tài khoản trong bản dùng thử dùng chung này.',
+  'Account details':'Thông tin tài khoản',
+  'This export exceeds the demo file-size limit.':'Tệp xuất này vượt quá giới hạn dung lượng của bản dùng thử.',
+  'CSV, up to {kb} KB and {rows} rows.':'Tệp CSV, tối đa {kb} KB và {rows} dòng.',
+  'Evidence files: up to {mb} MB.':'Tệp minh chứng: tối đa {mb} MB.',
+  'One file job at a time per account. Wait {seconds} seconds between jobs. There is no daily job limit.':'Mỗi tài khoản xử lý một tác vụ tệp tại một thời điểm. Chờ {seconds} giây giữa các tác vụ. Không giới hạn số tác vụ mỗi ngày.',
+  'The demo database is full. You can still browse existing data.':'Cơ sở dữ liệu dùng thử đã đầy. Bạn vẫn có thể xem dữ liệu hiện có.',
+  'The demo file storage is full. You can still browse existing data.':'Bộ nhớ tệp dùng thử đã đầy. Bạn vẫn có thể xem dữ liệu hiện có.',
+  'The demo file-transfer budget has been reached. You can still browse existing data.':'Đã dùng hết hạn mức truyền tệp dùng thử. Bạn vẫn có thể xem dữ liệu hiện có.',
+  'This account already has a file job running. Wait for it to finish.':'Tài khoản đang xử lý một tác vụ tệp. Vui lòng chờ tác vụ hoàn tất.',
+  'Please slow down and try again shortly.':'Bạn thao tác quá nhanh. Vui lòng thử lại sau ít phút.',
+  'This export has expired. Request a new export.':'Tệp xuất này đã hết hạn. Vui lòng yêu cầu xuất lại.',
+  'The CSV file could not be read. Check its format and try again.':'Không đọc được tệp CSV. Kiểm tra định dạng rồi thử lại.',
   'Back': 'Quay lại', 'Breadcrumb': 'Đường dẫn trang', 'Close menu': 'Đóng trình đơn',
   'Product details': 'Chi tiết sản phẩm', 'Receipt details': 'Chi tiết phiếu nhập',
   'Order details': 'Chi tiết đơn hàng', 'Return details': 'Chi tiết hàng trả',
@@ -265,6 +286,10 @@ export function errorText(text: string): string {
   const translated = t(text)
   if (translated !== text) return translated
   const rules: [RegExp, (match: RegExpMatchArray) => string][] = [
+    [/^CSV imports are limited to (\d+) rows in this demo\.$/,match=>`Bản dùng thử cho phép nhập tối đa ${match[1]} dòng CSV.`],
+    [/^CSV must be at most (\d+) KB in this demo\.$/,match=>`Tệp CSV trong bản dùng thử không được vượt quá ${match[1]} KB.`],
+    [/^Evidence must be one file of at most (\d+) MB in this demo\.$/,match=>`Mỗi tệp minh chứng trong bản dùng thử không được vượt quá ${match[1]} MB.`],
+    [/^Wait (\d+) seconds between file jobs\. There is no daily job limit\.$/,match=>`Chờ ${match[1]} giây giữa các tác vụ tệp. Không giới hạn số tác vụ mỗi ngày.`],
     [/^CSV header must be: (.*)$/s, match => `Tiêu đề CSV phải là: ${match[1]}`],
     [/^Unknown attribute: (.*)\.$/s, match => `Thuộc tính không được định nghĩa: ${match[1]}.`],
     [/^Required attribute missing: (.*)\.$/s, match => `Thiếu thuộc tính bắt buộc: ${match[1]}.`],

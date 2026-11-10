@@ -8,6 +8,7 @@ import { usePage } from '../lib/queries'
 import { useSession } from '../app/session-context'
 import { t } from '../app/locale'
 import { decimalText, notificationBody } from '../lib/numbers'
+import {useDemoInfo} from '../app/demo'
 
 type Notification = { id: string; eventClass?: string; title: string; body: string; targetPath: string; createdAt: string; readAt: string | null; titleKey?: string; titleValues?: Record<string,string>; messageKey?: string; messageValues?: Record<string,string> }
 
@@ -19,14 +20,23 @@ function translatedBody(row:Notification) {
 }
 
 function useLiveNotifications() {
+  const demo=useDemoInfo()
   const { user } = useSession()
   const client = useQueryClient()
   useEffect(() => {
-    if (!user) return
+    if (!user || demo.loading) return
     let stream: EventSource | undefined
     let polling: ReturnType<typeof setInterval> | undefined
     let failures = 0
     const update = () => { void client.invalidateQueries({ queryKey: ['page', '/notifications'] }); void client.invalidateQueries({ queryKey: ['unread-count'] }); void client.invalidateQueries({ queryKey: ['dashboard'] }) }
+    if(demo.enabled) {
+      let lastActivity=Date.now()
+      const activity=()=>{lastActivity=Date.now()}
+      const resume=()=>{if(document.visibilityState==='visible'){activity();update()}}
+      const timer=setInterval(()=>{if(document.visibilityState==='visible' && Date.now()-lastActivity<5*60_000)update()},30_000)
+      window.addEventListener('pointerdown',activity);window.addEventListener('keydown',activity);window.addEventListener('scroll',activity,{passive:true});window.addEventListener('focus',resume);document.addEventListener('visibilitychange',resume)
+      return ()=>{clearInterval(timer);window.removeEventListener('pointerdown',activity);window.removeEventListener('keydown',activity);window.removeEventListener('scroll',activity);window.removeEventListener('focus',resume);document.removeEventListener('visibilitychange',resume)}
+    }
     if (typeof EventSource !== 'undefined') {
       stream = new EventSource('/api/notifications/stream', { withCredentials: true })
       stream.addEventListener('notification', update)
@@ -34,7 +44,7 @@ function useLiveNotifications() {
       stream.onerror = () => { failures++; if (failures >= 3 && !polling) polling = setInterval(update, 30_000) }
     } else polling = setInterval(update, 30_000)
     return () => { stream?.close(); if (polling) clearInterval(polling) }
-  }, [user, client])
+  }, [user, client,demo.enabled,demo.loading])
 }
 
 export function NotificationCount() {

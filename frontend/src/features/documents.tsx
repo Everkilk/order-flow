@@ -1,3 +1,4 @@
+import {useDemoInfo} from '../app/demo'
 import { dateText } from '../app/locale'
 import { ProductReference } from '../components/ProductReference'
 import { OrderPicker } from '../components/OrderPicker'
@@ -151,6 +152,7 @@ function ShortageForm({ transferId, itemId, onChanged }: { transferId: string; i
 }
 
 export function Evidence({ target, id }: { target: 'discrepancies' | 'stock-requests'; id: string }) {
+  const demo=useDemoInfo()
   const { markDirty, markClean } = useUnsavedDraft()
   const query = useQuery({ queryKey: ['evidence', target, id], queryFn: () => api<{ items: { id: string; filename: string }[]; removed?: { id: string; filename: string; removedAt: string; removedBy: string; cleanupStatus: string }[]; canUpload?: boolean; canDelete?: boolean }>(`/evidence/${target}/${id}`) })
   const input = useRef<HTMLInputElement>(null)
@@ -164,7 +166,7 @@ export function Evidence({ target, id }: { target: 'discrepancies' | 'stock-requ
   async function upload(event: FormEvent) {
     event.preventDefault(); if (!file) return
     setError(undefined); setSuccess(''); setSavedButStale(false)
-    if (file.size > 5 * 1024 * 1024) { setError(new Error('Evidence must be 5 MB or smaller.')); return }
+    if (file.size > (demo.enabled ? demo.limits!.evidenceBytes : 5 * 1024 * 1024)) { setError(new Error(demo.enabled ? `Evidence must be one file of at most ${Math.floor(demo.limits!.evidenceBytes/1024/1024)} MB in this demo.` : 'Evidence must be 5 MB or smaller.')); return }
     const body = new FormData(); body.set('file', file)
     try { await api(`/evidence/${target}/${id}`, { method: 'POST', body }) } catch (e) { setError(e); return }
     markClean(); setFile(null); if(input.current) input.current.value=''; setSuccess('Upload received.'); await refreshAfterSave()
@@ -174,5 +176,5 @@ export function Evidence({ target, id }: { target: 'discrepancies' | 'stock-requ
     try { await api(`/evidence/stock-requests/${id}/${fileId}`, { method: 'DELETE' }) } catch (e) { setError(e); return }
     setSuccess('Evidence deleted.'); await refreshAfterSave()
   }
-  return <div className="evidence"><h3>{t('Evidence')}</h3>{query.isPending ? <Loading /> : query.error ? <Notice error={savedButStale ? new Error('The change was saved, but the page could not refresh. Reload to see the latest data.') : query.error} /> : query.data.items.map(row => <div className="evidence-row" key={row.id}><a href={`/api/evidence/${row.id}/file`} target="_blank" rel="noreferrer">{row.filename}</a>{target === 'stock-requests' && query.data.canDelete && <Confirm message={t('Delete evidence {filename}?', { filename: row.filename })} onConfirm={() => remove(row.id)}>{t('Delete')}</Confirm>}</div>)}<Notice error={error} /><Notice success={success} />{!query.error && query.data?.canUpload !== false && <MutationForm onChange={markDirty} onSubmit={upload} className="stack"><Field label="Evidence file"><input ref={input} type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field><button className="button subtle" disabled={!file}>{t('Upload evidence')}</button></MutationForm>}{query.data?.canUpload === false && <p className="muted">{t('Evidence is locked after a decision.')}</p>}{!query.error && !!query.data?.removed?.length && <section><h3>{t('Deletion history')}</h3><DataTable headers={['File','Deleted by','Deleted at','Storage cleanup']} rows={query.data.removed.map(row => [row.filename,row.removedBy,dateText(row.removedAt),row.cleanupStatus === 'DEAD' ? t('Cleanup failed; an administrator must review it.') : t(row.cleanupStatus)])} /></section>}</div>
+  return <div className="evidence"><h3>{t('Evidence')}</h3>{demo.enabled && <p className="muted">{t("Evidence files: up to {mb} MB.",{mb:Math.floor(demo.limits!.evidenceBytes/1024/1024)})}</p>}{query.isPending ? <Loading /> : query.error ? <Notice error={savedButStale ? new Error('The change was saved, but the page could not refresh. Reload to see the latest data.') : query.error} /> : query.data.items.map(row => <div className="evidence-row" key={row.id}><a href={`/api/evidence/${row.id}/file`} target="_blank" rel="noreferrer">{row.filename}</a>{target === 'stock-requests' && query.data.canDelete && <Confirm message={t('Delete evidence {filename}?', { filename: row.filename })} onConfirm={() => remove(row.id)}>{t('Delete')}</Confirm>}</div>)}<Notice error={error} /><Notice success={success} />{!query.error && query.data?.canUpload !== false && <MutationForm onChange={markDirty} onSubmit={upload} className="stack"><Field label="Evidence file"><input ref={input} type="file" accept="image/png,image/jpeg,application/pdf" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field><button className="button subtle" disabled={!file}>{t('Upload evidence')}</button></MutationForm>}{query.data?.canUpload === false && <p className="muted">{t('Evidence is locked after a decision.')}</p>}{!query.error && !!query.data?.removed?.length && <section><h3>{t('Deletion history')}</h3><DataTable headers={['File','Deleted by','Deleted at','Storage cleanup']} rows={query.data.removed.map(row => [row.filename,row.removedBy,dateText(row.removedAt),row.cleanupStatus === 'DEAD' ? t('Cleanup failed; an administrator must review it.') : t(row.cleanupStatus)])} /></section>}</div>
 }

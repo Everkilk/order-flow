@@ -2,7 +2,7 @@ import { SubmissionRecovery } from './components/SubmissionRecovery'
 import { MutationForm } from './components/MutationForm'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createBrowserRouter, createRoutesFromElements, Navigate, NavLink, Outlet, Route, RouterProvider, useNavigate, useParams } from 'react-router-dom'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { SessionProvider } from './app/session'
 import { useSession } from './app/session-context'
 import { ActionButton, Card, Loading, Notice } from './components/ui'
@@ -21,10 +21,14 @@ import { getLocale, setLocale, t } from './app/locale'
 import { NavigationTrail } from './components/NavigationTrail'
 import { confirmDiscard, useUnsavedNavigation } from './lib/unsaved'
 import './App.css'
+import {useDemoInfo} from './app/demo'
+import {DemoAccounts} from './components/DemoAccounts'
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 15_000, refetchOnWindowFocus: false } } })
 
 function Login() {
+  const demo=useDemoInfo()
+  const signIn=useRef<HTMLButtonElement>(null)
   const { login } = useSession()
   const [passwordChanged] = useState(() => {
     const changed = window.sessionStorage.getItem('orderflow.passwordChanged') === '1'
@@ -39,14 +43,16 @@ function Login() {
     event.preventDefault(); setBusy(true); setError(undefined)
     try { await login(email, password) } catch (e) { setError(e) } finally { setBusy(false) }
   }
-  return <div className="auth-page"><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><div className="brand auth-brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><h1>{t('Welcome back')}</h1><p>{t('Sign in to manage your warehouse.')}</p><MutationForm onSubmit={submit}><label className="field"><span>{t('Email')}</span><input type="email" required autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} /></label><label className="field"><span>{t('Password')}</span><input type="password" required autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label><Notice error={error} success={passwordChanged ? 'Password changed. Please sign in again.' : undefined} /><button className="button primary full" disabled={busy}>{t(busy ? 'Signing in…' : 'Sign in')}</button></MutationForm></Card></div>
+  return <div className="auth-page"><div className={demo.enabled?'auth-layout with-demo':'auth-layout'}><Card className="auth-card"><div className="auth-locale"><LocaleSelect /></div><div className="brand auth-brand"><img className="brand-logo" src="/logo.png" alt="" /><span>OrderFlow</span></div><h1>{t('Welcome back')}</h1><p>{t('Sign in to manage your warehouse.')}</p><MutationForm onSubmit={submit}><label className="field"><span>{t('Email')}</span><input type="email" required autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} /></label><label className="field"><span>{t('Password')}</span><input type="password" required autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></label><Notice error={error} success={passwordChanged ? 'Password changed. Please sign in again.' : undefined} /><button ref={signIn} className="button primary full" disabled={busy}>{t(busy ? 'Signing in…' : 'Sign in')}</button></MutationForm></Card>{demo.enabled && demo.accounts && <DemoAccounts accounts={demo.accounts} disabled={busy} onChoose={account=>{setEmail(account.email);setPassword(account.password);setError(undefined);signIn.current?.focus()}} />}</div></div>
 }
 
 function ChangePassword() {
+  const demo=useDemoInfo()
   const { user, refresh } = useSession()
   const [currentPassword, setCurrent] = useState('')
   const [newPassword, setNext] = useState('')
   const [error, setError] = useState<unknown>()
+  if(demo.enabled)return <div className="auth-page"><Card className="auth-card"><h1>{t('Change password')}</h1><p>{t('Account settings are read-only in this shared demo.')}</p></Card></div>
   if (!user) return <Login />
   async function submit(event: FormEvent) {
     event.preventDefault(); setError(undefined)
